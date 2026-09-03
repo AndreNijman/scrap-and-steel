@@ -25,6 +25,7 @@ export interface EditorCallbacks {
   onChange?: (bp: Blueprint, stats: EditorStats) => void;
   onSelect?: (partId: string | null) => void;
   onMessage?: (msg: string) => void;
+  onAction?: (action: "place" | "delete" | "wire" | "deny") => void;
 }
 
 const CATEGORY_COLORS: Record<string, number> = {
@@ -50,6 +51,7 @@ export class BuildEditor {
   private ghostDef: PartDef | null = null;
   private ghostPos: [number, number, number] = [0, 0, 0];
   private ghostRot = 0;
+  private ghostValid = true;
   private placeDefId: string | null = null;
   private meshes = new Map<string, THREE.Mesh>();
   private group = new THREE.Group();
@@ -193,12 +195,19 @@ export class BuildEditor {
     if (!this.placeDefId) return;
     const def = PART_DEFS[this.placeDefId];
     if (!def) return;
+    if (!this.ghostValid) {
+      this.cb.onMessage?.("Position occupied");
+      this.cb.onAction?.("deny");
+      return;
+    }
     if (this.bp.parts.length >= this.partLimit) {
       this.cb.onMessage?.(`Part limit reached (${this.partLimit})`);
+      this.cb.onAction?.("deny");
       return;
     }
     if (!this.canAfford(def)) {
       this.cb.onMessage?.(`Not enough Scrap Points (need ${def.cost})`);
+      this.cb.onAction?.("deny");
       return;
     }
     this.pushUndo();
@@ -210,6 +219,7 @@ export class BuildEditor {
     };
     this.bp.parts.push(part);
     this.autoBind(part.id, def);
+    this.cb.onAction?.("place");
     this.emit();
   }
 
@@ -235,6 +245,7 @@ export class BuildEditor {
     this.bp.wires = this.bp.wires.filter((w) => w.from !== partId && w.to !== partId);
     this.bp.bindings = this.bp.bindings.filter((b) => b.targetPartId !== partId);
     if (this.selected === partId) this.selected = null;
+    this.cb.onAction?.("delete");
     this.emit();
   }
 
@@ -301,6 +312,7 @@ export class BuildEditor {
     }
     this.pushUndo();
     this.bp.wires.push({ id: makeId("w"), from, to, gauge });
+    this.cb.onAction?.("wire");
     this.emit();
   }
 
@@ -402,6 +414,15 @@ export class BuildEditor {
     }
     this.ghost.position.set(snapped[0] * CELL, snapped[1] * CELL + (def.size[1] * CELL) / 2, snapped[2] * CELL);
     this.ghost.rotation.y = (this.ghostRot * Math.PI) / 2;
+    // invalid placement feedback: occupied cell, over budget or over part limit
+    const occupied = this.bp.parts.some((p) => p.pos[0] === snapped[0] && p.pos[1] === snapped[1] && p.pos[2] === snapped[2]);
+    const tooExpensive = blueprintCost(this.bp) + def.cost > this.budgetSp;
+    const overLimit = this.bp.parts.length >= this.partLimit;
+    const mat = this.ghost.material as THREE.MeshStandardMaterial;
+    const bad = occupied || tooExpensive || overLimit;
+    mat.color.setHex(bad ? 0xcc3322 : CATEGORY_COLORS[def.category] ?? 0xffffff);
+    mat.opacity = bad ? 0.3 : 0.45;
+    this.ghostValid = !bad && !occupied;
   };
 
   private onPointerDown = (e: PointerEvent) => {
@@ -492,6 +513,8 @@ export class BuildEditor {
     }
 
     const linePos: number[] = [];
+    const lineColors: number[] = [];
+    const GAUGE_COLORS: Record<string, number> = { light: 0x88b8ff, medium: 0xffd866, heavy: 0xff8855 };
     for (const w of this.bp.wires) {
       const a = this.bp.parts.find((p) => p.id === w.from);
       const b = this.bp.parts.find((p) => p.id === w.to);
@@ -503,11 +526,45 @@ export class BuildEditor {
         a.pos[0] * CELL, a.pos[1] * CELL + (da.size[1] * CELL) / 2, a.pos[2] * CELL,
         b.pos[0] * CELL, b.pos[1] * CELL + (db.size[1] * CELL) / 2, b.pos[2] * CELL,
       );
+      const c = new THREE.Color(GAUGE_COLORS[w.gauge] ?? 0xffd866);
+      lineColors.push(c.r, c.g, c.b, c.r, c.g, c.b);
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute("position", new THREE.Float32BufferAttribute(linePos, 3));
-    const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffd866 }));
+    g.setAttribute("color", new THREE.Float32BufferAttribute(lineColors, 3));
+    const lines = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.85 }));
     this.wireGroup.add(lines);
+
+    // center-of-mass gizmo (weighted by part mass)
+    if (this.bp.parts.length > 0) {
+      let mx = 0;
+      let my = 0;
+      let mz = 0;
+      let m = 0;
+      for (const p of this.bp.parts) {
+        const def = PART_DEFS[p.defId];
+        if (!def) continue;
+        mx += (p.pos[0] + def.size[0] / 2) * def.mass;
+        my += (p.pos[1] + def.size[1] / 2) * def.mass;
+        mz += (p.pos[2] + def.size[2] / 2) * def.mass;
+        m += def.mass;
+      }
+      if (m > 0) {
+        const com = new THREE.Mesh(
+          new THREE.SphereGeometry(0.06, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0xffdd55 }),
+        );
+        com.position.set((mx / m) * CELL, (my / m) * CELL, (mz / m) * CELL);
+        this.wireGroup.add(com);
+        const ring = new THREE.Mesh(
+          new THREE.RingGeometry(0.09, 0.12, 20),
+          new THREE.MeshBasicMaterial({ color: 0xffdd55, side: THREE.DoubleSide, transparent: true, opacity: 0.7 }),
+        );
+        ring.position.copy(com.position);
+        ring.rotation.x = -Math.PI / 2;
+        this.wireGroup.add(ring);
+      }
+    }
   }
 
   setSelected(partId: string | null) {

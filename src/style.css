@@ -11,6 +11,7 @@
   --good: #6fae5c;
   --bad: #c05038;
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Menlo, monospace;
+  --display: "Chakra Petch", var(--mono);
 }
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -243,3 +244,60 @@ button:disabled { opacity: 0.4; cursor: default; }
   width: 160px; text-transform: uppercase; letter-spacing: 0.2em;
 }
 .modal-box .row { display: flex; gap: 10px; margin-top: 16px; }
+
+/* ---- boot / loading ---- */
+#boot {
+  position: fixed; inset: 0; z-index: 100;
+  background: radial-gradient(ellipse at 50% 40%, #241b13 0%, #16120e 65%);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 0.5s;
+}
+#boot.done { opacity: 0; pointer-events: none; }
+.boot-inner { text-align: center; width: 320px; }
+.boot-logo { font-family: var(--display); font-size: 26px; font-weight: 700; letter-spacing: 0.18em; margin-bottom: 26px; }
+.boot-logo .amp { color: var(--accent); }
+.boot-bar { height: 3px; background: #2b221a; border-radius: 2px; overflow: hidden; }
+#boot-fill { height: 100%; width: 8%; background: var(--accent); transition: width 0.4s ease; }
+.boot-status { margin-top: 12px; font-size: 12px; color: var(--dim); letter-spacing: 0.08em; }
+.boot-error { margin-top: 14px; font-size: 12px; color: var(--bad); line-height: 1.6; }
+
+/* ---- menu dressing ---- */
+.menu-vignette { position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(12,9,6,0.55) 100%); }
+#screen-menu { display: flex; align-items: center; justify-content: center; }
+.menu-box h1 { font-family: var(--display); }
+.menu-row { display: flex; gap: 10px; }
+.result-banner {
+  font-family: var(--display); font-size: 44px; font-weight: 700; letter-spacing: 0.14em;
+  margin-bottom: 4px;
+}
+.result-banner.win { color: #e8c860; text-shadow: 0 0 24px rgba(232,180,60,0.35); }
+.result-banner.lose { color: var(--bad); }
+.result-banner.draw { color: var(--dim); }
+.result-stats { display: flex; gap: 22px; justify-content: center; margin-bottom: 22px; font-size: 12px; color: var(--dim); }
+.result-stats b { display: block; color: var(--text); font-size: 18px; font-family: var(--display); }
+
+#test-banner {
+  position: absolute; top: 58px; left: 50%; transform: translateX(-50%);
+  background: rgba(216,121,46,0.12); border: 1px solid var(--accent);
+  color: var(--accent2); padding: 6px 18px; font-size: 13px; letter-spacing: 0.14em;
+}
+#test-banner span { color: var(--dim); letter-spacing: 0.02em; }
+
+#ko-banner {
+  position: absolute; top: 34%; left: 0; right: 0; text-align: center;
+  font-family: var(--display); font-size: 52px; font-weight: 700; letter-spacing: 0.3em;
+  color: var(--bad); text-shadow: 0 2px 30px rgba(0,0,0,0.8);
+  animation: koPulse 0.6s ease infinite alternate;
+}
+@keyframes koPulse { from { opacity: 0.55; } to { opacity: 1; } }
+
+#combat-phase { color: var(--dim); font-size: 11px; letter-spacing: 0.2em; margin-top: 2px; }
+.robot-status .name { font-family: var(--display); }
+
+#countdown {
+  font-family: var(--display); font-weight: 700;
+}
+.cond .chip-ok { color: var(--good); }
+.cond .chip-bad { color: var(--bad); }
+.cond .chip-warn { color: #c9b03b; }

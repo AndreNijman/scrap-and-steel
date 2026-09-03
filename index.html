@@ -4,14 +4,34 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Scrap and Steel — build it, wire it, fight it</title>
-  <meta name="description" content="Physics-based robot building sandbox and 1v1 arena fighter." />
+  <meta name="description" content="Physics-based robot building sandbox and 1v1 arena fighter. Assemble a robot, wire its power grid, bind its controls, then fight it online." />
+  <meta name="theme-color" content="#16120e" />
+  <meta property="og:title" content="Scrap and Steel" />
+  <meta property="og:description" content="Build it. Wire it. Bind it. Fight it. A physics robot-building sandbox and 1v1 arena fighter." />
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://scrap.andrenijman.com/" />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316120e'/%3E%3Cpath d='M7 21 13 9h3l4.5 8.5L23 12h2.5l-3.4 6.7L24 23h-3l-2-4.3L15.6 23h-3l-4-8z' fill='%23d8792e'/%3E%3C/svg%3E" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
   <canvas id="gl"></canvas>
 
+  <!-- BOOT / LOADING -->
+  <div id="boot">
+    <div class="boot-inner">
+      <div class="boot-logo">SCRAP <span class="amp">&amp;</span> STEEL</div>
+      <div class="boot-bar"><div id="boot-fill"></div></div>
+      <div id="boot-status" class="boot-status">Waking the foundry…</div>
+      <div id="boot-error" class="boot-error hidden"></div>
+    </div>
+  </div>
+
   <!-- MENU -->
-  <div id="screen-menu" class="screen">
+  <div id="screen-menu" class="screen hidden">
+    <div class="menu-vignette"></div>
     <div class="menu-box">
       <h1>SCRAP <span class="amp">&amp;</span> STEEL</h1>
       <p class="tagline">Build it. Wire it. Bind it. Fight it.</p>
@@ -19,7 +39,10 @@
         <button id="btn-solo" class="big">Solo vs AI</button>
         <button id="btn-online" class="big">Online 1v1</button>
         <button id="btn-join" class="big secondary">Join by Code…</button>
-        <button id="btn-help" class="small">How to play</button>
+        <div class="menu-row">
+          <button id="btn-settings" class="small">Settings</button>
+          <button id="btn-help" class="small">How to play</button>
+        </div>
       </div>
       <div id="relay-status" class="relay-status">relay: checking…</div>
       <div class="versions"><span id="ver-text"></span></div>
@@ -51,12 +74,13 @@
   <div id="screen-build" class="screen hidden">
     <div id="build-topbar">
       <div class="tb-left">
-        <span id="bp-name" contenteditable="true" spellcheck="false">My Robot</span>
+        <span id="bp-name" contenteditable="true" spellcheck="false" title="Click to rename your robot">My Robot</span>
       </div>
       <div class="tb-center">
         <span id="build-timer" class="timer">--:--</span>
         <span id="build-budget" class="pill">SP 0/1000</span>
         <span id="build-mass" class="pill">0 kg</span>
+        <span id="build-power" class="pill">0 kW peak</span>
         <span id="build-parts" class="pill">0/120 parts</span>
       </div>
       <div class="tb-right">
@@ -81,11 +105,12 @@
     <div id="controls-panel">
       <h3>Controls</h3>
       <div id="controls-body"></div>
-      <div class="hint">W/S throttle · A/D steer · Space fire · Shift lift (remappable)</div>
+      <div class="hint">W/S throttle · A/D steer · Space fire · Shift lift — remappable</div>
     </div>
 
     <div id="preflight" class="hidden"></div>
     <div id="build-msg" class="hidden"></div>
+    <div id="test-banner" class="hidden">TEST BAY <span id="test-banner-sub">— build is read-only · End Test restores your build exactly</span></div>
     <div id="countdown" class="hidden"></div>
   </div>
 
@@ -93,14 +118,19 @@
   <div id="screen-combat" class="screen hidden">
     <div id="combat-topbar">
       <div class="robot-status" id="status-p0"></div>
-      <div id="combat-timer" class="timer big">--:--</div>
+      <div class="combat-center">
+        <div id="combat-timer" class="timer big">--:--</div>
+        <div id="combat-phase" class="phase"></div>
+      </div>
       <div class="robot-status right" id="status-p1"></div>
     </div>
+    <div id="ko-banner" class="hidden">OUT OF ACTION</div>
     <div id="debug-overlay" class="hidden"></div>
     <div id="result-overlay" class="hidden">
       <div class="result-box">
-        <h2 id="result-title">—</h2>
+        <div id="result-banner" class="result-banner">VICTORY</div>
         <p id="result-reason"></p>
+        <div id="result-stats" class="result-stats"></div>
         <div class="menu-buttons">
           <button id="btn-rematch" class="big">Rematch</button>
           <button id="btn-result-menu" class="big secondary">Menu</button>
@@ -109,7 +139,7 @@
     </div>
   </div>
 
-  <!-- HELP / JOIN MODALS -->
+  <!-- MODALS -->
   <div id="modal" class="hidden">
     <div class="modal-box" id="modal-content"></div>
   </div>

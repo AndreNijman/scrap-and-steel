@@ -218,13 +218,17 @@ export function spawnRobot(pw: PhysicsWorld, bp: Blueprint, side: 0 | 1, opts: S
     if (def.id === "control_core") rt.cores.push(p.id);
   }
 
-  // ---- adjacency welds (wheels are NEVER welded: they need a motor revolute mount) ----
+  // ---- adjacency welds (wheels and free-spinning weapons are NEVER welded:
+  //      they need revolute mounts or they cannot rotate) ----
   const partsArr = bp.parts.filter((p) => rt.parts.has(p.id));
   for (let i = 0; i < partsArr.length; i++) {
     for (let j = i + 1; j < partsArr.length; j++) {
       const a = partsArr[i]!;
       const b = partsArr[j]!;
-      if (PART_DEFS[a.defId]?.shape === "wheel" || PART_DEFS[b.defId]?.shape === "wheel") continue;
+      const da = PART_DEFS[a.defId];
+      const db = PART_DEFS[b.defId];
+      if (da?.shape === "wheel" || db?.shape === "wheel") continue;
+      if (da?.weapon?.kind === "spinner" || db?.weapon?.kind === "spinner") continue;
       const face = touchingFace(a, b, rt);
       if (!face) continue;
       const ra = rt.parts.get(a.id)!;
