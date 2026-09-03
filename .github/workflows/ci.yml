@@ -1,0 +1,28 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # secret scan: reject credential-looking patterns and any special.special reference
+      - name: Secret scan
+        run: |
+          ! grep -rInE "special\.special|CLOUDFLARE_API_TOKEN\s*=\s*['\"]?[A-Za-z0-9_-]{20,}|cfat [A-Za-z0-9_-]{20,}" src/ shared/ worker/ tools/ docs/ *.json *.ts 2>/dev/null
+      - run: npm run check
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: node tools/smoke.mjs
