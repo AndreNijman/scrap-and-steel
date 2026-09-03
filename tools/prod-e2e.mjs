@@ -38,6 +38,8 @@ async function makePlayer() {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
   const page = await ctx.newPage();
   page.on("pageerror", (e) => fail(`pageerror: ${e.message}`));
+  page.on("console", (m) => { if (m.type() === "error" && !/net::ERR|Failed to load resource/.test(m.text())) console.log(`  [console] ${m.text()}`); });
+  page.on("websocket", (ws) => console.log(`  [ws] ${ws.url()}`));
   await page.goto(SITE, { waitUntil: "load", timeout: 30000 });
   await page.evaluate((bp) => {
     localStorage.setItem("scrap_bp_autosave_p0", bp);
@@ -62,6 +64,16 @@ await p2.click("#btn-join");
 await p2.fill("#join-code", code);
 await p2.click("#do-join");
 await p2.waitForSelector("#screen-lobby:not(.hidden)", { timeout: 15000 });
+// wait until the host sees the guest in the room (Ready unlocks only then)
+let guestSeen = false;
+for (let i = 0; i < 30; i++) {
+  const p1txt = await p1.textContent("#lobby-p1");
+  const p2txt = await p2.textContent("#lobby-p0").catch(() => "?");
+  if (p1txt && p1txt.includes("Guest")) { guestSeen = true; break; }
+  if (i === 14) console.log(`  [diag] host sees p1="${p1txt}" | guest sees p0="${p2txt}"`);
+  await p1.waitForTimeout(500);
+}
+if (!guestSeen) fail("host never saw the guest in the lobby");
 ok("guest joined lobby");
 
 // both ready -> build phase with deadline
