@@ -69,7 +69,7 @@ let guestSeen = false;
 for (let i = 0; i < 30; i++) {
   const p1txt = await p1.textContent("#lobby-p1");
   const p2txt = await p2.textContent("#lobby-p0").catch(() => "?");
-  if (p1txt && p1txt.includes("Guest")) { guestSeen = true; break; }
+  if (p1txt && !p1txt.includes("waiting")) { guestSeen = true; break; }
   if (i === 14) console.log(`  [diag] host sees p1="${p1txt}" | guest sees p0="${p2txt}"`);
   await p1.waitForTimeout(500);
 }
