@@ -95,15 +95,17 @@ export class GameRenderer {
   constructor(canvas: HTMLCanvasElement) {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-    this.scene.background = new THREE.Color(0x1a1512);
-    this.scene.fog = new THREE.Fog(0x1a1512, 30, 80);
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.18;
+    this.scene.background = new THREE.Color(0x14100d);
+    this.scene.fog = new THREE.Fog(0x14100d, 34, 85);
     this.camera = new THREE.PerspectiveCamera(55, 1, 0.1, 200);
     this.camera.position.set(8, 7, 10);
     this.camera.lookAt(0, 0.5, 0);
 
-    const hemi = new THREE.HemisphereLight(0xfff2e0, 0x33241a, 0.9);
+    const hemi = new THREE.HemisphereLight(0xfff2e0, 0x3d2c1f, 1.15);
     this.scene.add(hemi);
-    this.dirLight = new THREE.DirectionalLight(0xffe8c8, 1.6);
+    this.dirLight = new THREE.DirectionalLight(0xffe8c8, 2.0);
     this.dirLight.position.set(8, 14, 6);
     this.dirLight.castShadow = true;
     this.dirLight.shadow.mapSize.set(1024, 1024);
@@ -112,7 +114,19 @@ export class GameRenderer {
     this.dirLight.shadow.camera.top = 14;
     this.dirLight.shadow.camera.bottom = -14;
     this.scene.add(this.dirLight);
+    // warm corner fill lights for a lit-arena feel
+    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]] as [number, number][]) {
+      const p = new THREE.PointLight(0xff9a4a, 12, 26, 1.8);
+      p.position.set(x * 7.5, 4.5, z * 7.5);
+      this.scene.add(p);
+    }
     this.scene.add(this.arenaGroup);
+  }
+
+  private shake = 0;
+
+  addShake(mag: number) {
+    this.shake = Math.min(0.5, this.shake + mag);
   }
 
   setQuality(q: QualityTier) {
@@ -132,12 +146,47 @@ export class GameRenderer {
     floor.receiveShadow = true;
     this.arenaGroup.add(floor);
 
+    // painted center ring + lane markings (procedural canvas texture)
+    const cv = document.createElement("canvas");
+    cv.width = 512;
+    cv.height = 512;
+    const g = cv.getContext("2d")!;
+    g.fillStyle = "#4a3b30";
+    g.fillRect(0, 0, 512, 512);
+    g.strokeStyle = "#5d4a3a";
+    g.lineWidth = 3;
+    for (let i = 1; i < 8; i++) {
+      g.beginPath();
+      g.arc(256, 256, i * 30, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.strokeStyle = "#8a5c30";
+    g.lineWidth = 6;
+    g.beginPath();
+    g.arc(256, 256, 120, 0, Math.PI * 2);
+    g.stroke();
+    g.beginPath();
+    g.moveTo(256, 20);
+    g.lineTo(256, 492);
+    g.stroke();
+    const tex = new THREE.CanvasTexture(cv);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    const center = new THREE.Mesh(
+      new THREE.PlaneGeometry(h * 1.4, h * 1.4),
+      new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, transparent: true, opacity: 0.55 }),
+    );
+    center.rotation.x = -Math.PI / 2;
+    center.position.y = 0.012;
+    center.receiveShadow = true;
+    this.arenaGroup.add(center);
+
     // floor grid lines
     const grid = new THREE.GridHelper(h * 2, h * 4, 0x5a4636, 0x554433);
-    grid.position.y = 0.01;
+    grid.position.y = 0.011;
     this.arenaGroup.add(grid);
 
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x6b5a48, roughness: 0.8, metalness: 0.2 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x9a6a3a, roughness: 0.6, emissive: 0x6a3510, emissiveIntensity: 0.35 });
     const wh = arena.wallH;
     const walls: [number, number, number, number, number, number][] = [
       [0, wh / 2, h + 0.25, h * 2 + 2, wh, 0.5],
@@ -151,6 +200,26 @@ export class GameRenderer {
       m.castShadow = true;
       m.receiveShadow = true;
       this.arenaGroup.add(m);
+      // glowing trim strip along the top of each wall
+      const trim = new THREE.Mesh(new THREE.BoxGeometry(sx > sz ? sx : sz * 0.15, 0.09, sz > sx ? sz : sx * 0.15), trimMat);
+      trim.position.set(x * 0.985, y + sy / 2, z * 0.985);
+      this.arenaGroup.add(trim);
+    }
+    // corner pylons
+    const pyMat = new THREE.MeshStandardMaterial({ color: 0x3d3125, roughness: 0.7, metalness: 0.4 });
+    for (const sx of [-1, 1]) {
+      for (const sz of [-1, 1]) {
+        const p = new THREE.Mesh(new THREE.BoxGeometry(0.7, wh + 1.4, 0.7), pyMat);
+        p.position.set(sx * (h + 0.25), (wh + 1.4) / 2, sz * (h + 0.25));
+        p.castShadow = true;
+        this.arenaGroup.add(p);
+        const lamp = new THREE.Mesh(
+          new THREE.BoxGeometry(0.5, 0.18, 0.5),
+          new THREE.MeshStandardMaterial({ color: 0xffd9a0, emissive: 0xffb45e, emissiveIntensity: 1.6 }),
+        );
+        lamp.position.set(sx * (h + 0.25), wh + 1.2, sz * (h + 0.25));
+        this.arenaGroup.add(lamp);
+      }
     }
     if (arena.ramps) {
       const rampMat = new THREE.MeshStandardMaterial({ color: 0x7a6a58, roughness: 0.85 });
@@ -248,7 +317,20 @@ export class GameRenderer {
   }
 
   renderFrame() {
-    this.renderer.render(this.scene, this.camera);
+    // camera shake: jitter around the current position, restore after render
+    if (this.shake > 0.001) {
+      const base = this.camera.position.clone();
+      const s = this.shake;
+      this.camera.position.x += (Math.random() - 0.5) * s;
+      this.camera.position.y += (Math.random() - 0.5) * s * 0.6;
+      this.camera.position.z += (Math.random() - 0.5) * s;
+      this.renderer.render(this.scene, this.camera);
+      this.camera.position.copy(base);
+      this.shake *= 0.86;
+    } else {
+      this.shake = 0;
+      this.renderer.render(this.scene, this.camera);
+    }
   }
 
   clearRobots() {
@@ -273,9 +355,14 @@ export class GameRenderer {
 
 /** Minimal orbit camera controller (drag orbit, wheel zoom, right-drag pan). */
 export class OrbitCam {
+  autoRotate = false;
   private theta = Math.PI / 4;
   private phi = 0.9;
   private radius = 12;
+
+  getRadius(): number { return this.radius; }
+  setRadius(r: number) { this.radius = Math.max(3, Math.min(45, r)); this.update(); }
+  setPhi(p: number) { this.phi = Math.max(0.15, Math.min(1.45, p)); this.update(); }
   private target = new THREE.Vector3(0, 0.8, 0);
   private dragging = 0;
   private lastX = 0;
@@ -327,7 +414,8 @@ export class OrbitCam {
     this.update();
   }
 
-  update() {
+  update(dt = 0) {
+    if (this.autoRotate && !this.dragging) this.theta += dt * 0.06;
     const sp = Math.sin(this.phi);
     this.camera.position.set(
       this.target.x + this.radius * sp * Math.sin(this.theta),

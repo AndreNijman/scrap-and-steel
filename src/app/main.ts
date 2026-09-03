@@ -1,20 +1,22 @@
 // SCRAP AND STEEL — app/main.ts
-// Boot, screen state machine, game loop, HUD. Rendering stays outside UI re-renders;
-// the only state store is the DOM itself (deliberately boring).
+// Boot, screen state machine, game loop, audio/visual game-feel, HUD.
+// Rendering stays outside any UI re-render cycle; the DOM is the only UI store.
 
 import { initPhysics } from "../sim/adapter";
 import { MatchSimulation, TICK_DT } from "../sim/simulation";
 import { newRobotInput, type RobotInput } from "../sim/robot";
-import { GameRenderer, OrbitCam } from "../render/scene";
+import { GameRenderer, OrbitCam, type QualityTier } from "../render/scene";
+import { Particles } from "../render/particles";
 import { BuildEditor } from "../editor/editor";
 import { InputState } from "../control/input";
-import { PART_DEFS, PART_LIST, CATEGORIES, ARENAS, BUDGET_PRESETS, type PartCategory, type ArenaDef } from "../content/parts";
+import { PART_DEFS, PART_LIST, CATEGORIES, ARENAS, BUDGET_PRESETS, type PartCategory } from "../content/parts";
 import { DEFAULT_SETTINGS, type Blueprint, type BuildSettings, type InputChannel, blueprintCost } from "../blueprint/types";
 import { blueprintHash } from "../blueprint/canonical";
 import { RelayClient, resolveRelayUrl } from "../net/client";
 import { GAME_VERSION, PROTOCOL_VERSION } from "../../shared/protocol";
 import { buildAiBot, AiController } from "../combat/ai";
 import { migrateBlueprint } from "../blueprint/types";
+import { initAudio, sfx, setVolume, getVolume, setMuted, isMuted, updateDriveSound, updateWeaponSound, stopLoops } from "../audio/sfx";
 
 type Screen = "menu" | "lobby" | "build" | "combat";
 type Mode = "solo" | "test" | "online";
@@ -25,6 +27,7 @@ let currentScreen: Screen = "menu";
 let mode: Mode = "solo";
 let sim: MatchSimulation | null = null;
 let renderer: GameRenderer | null = null;
+let particles: Particles | null = null;
 let orbit: OrbitCam | null = null;
 let editor: BuildEditor | null = null;
 let input = new InputState();
@@ -37,8 +40,8 @@ let buildDeadline = 0;
 let combatDeadline = 0;
 let testSnapshot: string | null = null;
 let testing = false;
-let acc = 0;
 let lastFrame = 0;
+let acc = 0;
 let remoteInput: [RobotInput, RobotInput] = [newRobotInput(), newRobotInput()];
 let ai: AiController | null = null;
 let snapshotTimer = 0;
@@ -49,11 +52,30 @@ let desyncWarnings = 0;
 let ping = 0;
 let pingTimer = 0;
 let debugVisible = false;
+let outcomeBeat = 0; // slow-mo beat after a KO
+let outcomeStepGate = 0;
+let shakeEnabled = true;
+let countdownLast = -1;
+
+interface PersistedPrefs {
+  quality: QualityTier | "auto";
+  shake: boolean;
+}
+function loadPrefs(): PersistedPrefs {
+  try {
+    const raw = localStorage.getItem("scrap_prefs_v1");
+    if (raw) return { quality: "auto", shake: true, ...JSON.parse(raw) };
+  } catch {
+    // fall through
+  }
+  return { quality: "auto", shake: true };
+}
+let prefs: PersistedPrefs = loadPrefs();
 
 const canvas = $("gl") as HTMLCanvasElement;
 
 // ---------------------------------------------------------------------------
-// screen helpers
+// helpers
 
 function show(screen: Screen) {
   currentScreen = screen;
@@ -69,23 +91,87 @@ function message(text: string) {
   window.setTimeout(() => el.classList.add("hidden"), 2200);
 }
 
+function arena(id: string) {
+  return ARENAS[id] ?? ARENAS.foundry!;
+}
+
+function bootFail(msg: string) {
+  $("boot-status").textContent = "";
+  const err = $("boot-error");
+  err.textContent = msg;
+  err.classList.remove("hidden");
+  ($("boot-fill") as HTMLElement).style.width = "100%";
+  ($("boot-fill") as HTMLElement).style.background = "var(--bad)";
+}
+
+function bootStatus(text: string, frac: number) {
+  $("boot-status").textContent = text;
+  ($("boot-fill") as HTMLElement).style.width = `${Math.round(frac * 100)}%`;
+}
+
 // ---------------------------------------------------------------------------
 // boot
 
 async function boot() {
   $("ver-text").textContent = `v${GAME_VERSION} · protocol v${PROTOCOL_VERSION}`;
+
+  bootStatus("Waking the foundry…", 0.1);
+  // WebGL compatibility gate (release gate: explicit notice, not a blank screen)
+  const glProbe = document.createElement("canvas");
+  const glOk = !!(glProbe.getContext("webgl2") ?? glProbe.getContext("webgl"));
+  if (!glOk) {
+    bootFail("Your browser does not support WebGL, which this game requires. Try a current version of Firefox or Chromium.");
+    return;
+  }
+
+  bootStatus("Compiling physics core…", 0.25);
   renderer = new GameRenderer(canvas);
-  renderer.setQuality("medium");
+  particles = new Particles(renderer.scene);
+  applyQuality(prefs.quality);
   orbit = new OrbitCam(renderer.camera, canvas);
   input = new InputState();
+
+  bootStatus("Spinning up the arena…", 0.6);
   await initPhysics();
+
+  // menu background: lit arena with a slow orbiting camera
+  renderer.buildArena(arena("foundry"));
+  orbit.autoRotate = true;
+  orbit.setRadius(15);
+  orbit.setPhi(1.05);
+
+  bootStatus("Connecting to relay…", 0.9);
   checkRelay();
-  show("menu");
   bindMenu();
   bindBuildUi();
+  bindSettingsModal();
+  bindAudioHooks();
+
   window.addEventListener("resize", resize);
   resize();
+  window.setTimeout(() => {
+    $("boot").classList.add("done");
+    show("menu");
+    if (window.innerWidth < 900) {
+      message;
+    }
+  }, 350);
   requestAnimationFrame(frame);
+}
+
+function applyQuality(q: QualityTier | "auto") {
+  prefs.quality = q;
+  persistPrefs();
+  let tier: QualityTier = q === "auto" ? (navigator.hardwareConcurrency >= 8 ? "high" : "medium") : q;
+  renderer?.setQuality(tier);
+}
+
+function persistPrefs() {
+  try {
+    localStorage.setItem("scrap_prefs_v1", JSON.stringify(prefs));
+  } catch {
+    // non-fatal
+  }
 }
 
 function resize() {
@@ -112,11 +198,62 @@ async function checkRelay() {
 }
 
 // ---------------------------------------------------------------------------
-// menu
+// audio hooks
 
-function arena(id: string): ArenaDef {
-  return ARENAS[id] ?? ARENAS.foundry!;
+function bindAudioHooks() {
+  const unlock = () => initAudio();
+  window.addEventListener("pointerdown", unlock, { once: false });
+  window.addEventListener("keydown", unlock, { once: false });
+  document.addEventListener("pointerdown", (e) => {
+    const t = e.target as HTMLElement;
+    if (t instanceof HTMLButtonElement) sfx.uiClick();
+  });
+  document.addEventListener("pointerenter", (e) => {
+    const t = e.target as HTMLElement;
+    if (t instanceof HTMLButtonElement) sfx.uiHover();
+  }, true);
 }
+
+// ---------------------------------------------------------------------------
+// settings modal
+
+function bindSettingsModal() {
+  $("btn-settings").onclick = () => {
+    openModal(`
+      <h3>Settings</h3>
+      <div class="setting-row"><span>Graphics quality</span>
+        <select id="set-quality">
+          <option value="auto" ${prefs.quality === "auto" ? "selected" : ""}>Auto</option>
+          <option value="low" ${prefs.quality === "low" ? "selected" : ""}>Low</option>
+          <option value="medium" ${prefs.quality === "medium" ? "selected" : ""}>Medium</option>
+          <option value="high" ${prefs.quality === "high" ? "selected" : ""}>High</option>
+        </select>
+      </div>
+      <div class="setting-row"><span>Volume</span>
+        <input id="set-volume" type="range" min="0" max="100" value="${Math.round(getVolume() * 100)}" style="width:140px">
+      </div>
+      <div class="setting-row"><span>Mute</span><input id="set-mute" type="checkbox" ${isMuted() ? "checked" : ""}></div>
+      <div class="setting-row"><span>Camera shake</span><input id="set-shake" type="checkbox" ${prefs.shake ? "checked" : ""}></div>
+      <p class="hint" style="margin-top:10px">All gameplay keys are remappable — see How to play.</p>
+      <div class="row"><button class="big" id="settings-close">Done</button></div>
+    `);
+    $("set-quality").addEventListener("change", (e) => applyQuality((e.target as HTMLSelectElement).value as QualityTier | "auto"));
+    $("set-volume").addEventListener("input", (e) => {
+      initAudio();
+      setVolume(parseInt((e.target as HTMLInputElement).value, 10) / 100);
+    });
+    $("set-mute").addEventListener("change", (e) => setMuted((e.target as HTMLInputElement).checked));
+    $("set-shake").addEventListener("change", (e) => {
+      prefs.shake = (e.target as HTMLInputElement).checked;
+      persistPrefs();
+      shakeEnabled = prefs.shake;
+    });
+    $("settings-close").onclick = closeModal;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// menu
 
 function startSolo() {
   mode = "solo";
@@ -156,13 +293,15 @@ function showHelp() {
     <h3>How to play</h3>
     <ul>
       <li><b>Build:</b> pick parts from the bin, click in the world to place. R rotates, X deletes, Ctrl+D duplicates. Wheels must touch a motor to be driven.</li>
-      <li><b>Wire:</b> switch to the Wire tool and click battery → motor/weapon. No wire, no power.</li>
-      <li><b>Controls:</b> motors are auto-bound to W/S/A/D. Weapons fire with Space.</li>
+      <li><b>Wire:</b> switch to the Wire tool and click battery → motor/weapon. No wire, no power. Wire color shows its gauge.</li>
+      <li><b>Controls:</b> motors are auto-bound to W/S/A/D. Weapons fire with Space. The yellow ring in the floor marks your center of mass.</li>
       <li><b>Test:</b> Start Test simulates your robot with real physics. End Test restores your build exactly.</li>
-      <li><b>Fight:</b> a robot dies when it can no longer move <i>and</i> cannot attack — for 3 straight seconds. An empty battery is not death.</li>
+      <li><b>Fight:</b> a robot dies when it can no longer move <i>and</i> cannot attack — for 3 straight seconds. An empty battery is not death; keep hitting them.</li>
+      <li><b>Online:</b> create a room, share the code, both Ready → 7-minute build (server clock), lock in, fight.</li>
     </ul>
-    <div class="row"><button class="big" onclick="document.getElementById('modal').classList.add('hidden')">Got it</button></div>
+    <div class="row"><button class="big" id="help-close">Got it</button></div>
   `);
+  $("help-close").onclick = closeModal;
 }
 
 function promptJoin() {
@@ -172,21 +311,27 @@ function promptJoin() {
     <p><input id="join-code" maxlength="5" placeholder="ABCDE" /></p>
     <div class="row">
       <button class="big" id="do-join">Join</button>
-      <button class="small" onclick="document.getElementById('modal').classList.add('hidden')">Cancel</button>
+      <button class="small" id="join-cancel">Cancel</button>
     </div>
   `);
   $("do-join").onclick = () => {
     const code = ($("join-code") as HTMLInputElement).value.trim().toUpperCase();
     if (code.length >= 4) {
-      $("modal").classList.add("hidden");
+      closeModal();
       connectOnline(`code=${code}`);
     }
   };
+  $("join-cancel").onclick = closeModal;
+  $("join-code").focus();
 }
 
 function openModal(html: string) {
   $("modal-content").innerHTML = html;
   $("modal").classList.remove("hidden");
+}
+
+function closeModal() {
+  $("modal").classList.add("hidden");
 }
 
 // ---------------------------------------------------------------------------
@@ -256,6 +401,10 @@ function handleRelayMessage(t: string, payload: unknown) {
         desyncWarnings++;
       }
       if (p.slot !== mySlot) lastChecksumPeer = hash;
+      break;
+    }
+    case "pong": {
+      if (typeof p.t === "number") ping = Date.now() - (p.t as number);
       break;
     }
     case "peer_disconnected":
@@ -339,7 +488,7 @@ function leaveOnline() {
   relay?.close();
   relay = null;
   roomCode = null;
-  show("menu");
+  backToMenu();
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +497,6 @@ function leaveOnline() {
 let activeCategory: PartCategory = "frame";
 
 function bindBuildUi() {
-  // parts bin tabs
   const tabs = $("bin-tabs");
   for (const c of CATEGORIES) {
     const b = document.createElement("button");
@@ -392,8 +540,11 @@ function enterBuild(m: Mode) {
   testSnapshot = null;
   sim?.destroy();
   sim = null;
+  stopLoops();
+  particles?.clear();
   renderer?.clearRobots();
   renderer?.buildArena(arena("foundry"));
+  orbit!.autoRotate = false;
   orbit?.setTarget(0, 0.6, 0);
 
   const saveKey = mode === "online" ? `scrap_bp_autosave_p${mySlot}` : "scrap_bp_autosave_p1";
@@ -402,17 +553,23 @@ function enterBuild(m: Mode) {
     onChange: updateBuildHud,
     onSelect: updateInspector,
     onMessage: message,
+    onAction: (a) => {
+      if (a === "place") sfx.place();
+      else if (a === "delete") sfx.delete();
+      else if (a === "wire") sfx.wire();
+      else sfx.uiClick();
+    },
   }, saveKey);
   editor.budgetSp = settings.budgetSp;
   editor.partLimit = settings.partLimit;
   updateBuildHud(editor.getBlueprintSnapshot(), null);
-  renderControlsPanel();
+  $("bp-name").textContent = editor.bp.name;
 
   if (mode === "online") {
-    $("build-timer").parentElement!.classList.remove("hidden");
-    $("btn-lock").classList.remove("hidden");
+    buildDeadline = buildDeadline > 0 ? buildDeadline : Date.now() + settings.buildTimeSec * 1000;
   } else {
     buildDeadline = 0;
+    $("build-timer").textContent = "∞";
   }
 }
 
@@ -424,6 +581,15 @@ function updateBuildHud(bp: Blueprint, stats: unknown) {
   $("build-parts").textContent = `${bp.parts.length}/${settings.partLimit} parts`;
   const mass = bp.parts.reduce((s, p) => s + (PART_DEFS[p.defId]?.mass ?? 0), 0);
   $("build-mass").textContent = `${mass.toFixed(0)} kg`;
+  // peak power estimate: sum of peak draws of installed actuators
+  let peak = 0;
+  for (const p of bp.parts) {
+    const d = PART_DEFS[p.defId];
+    if (d?.motor) peak += d.motor.peakW;
+    if (d?.weapon) peak += d.weapon.peakW;
+    if (d?.lifter) peak += d.lifter.peakW;
+  }
+  $("build-power").textContent = `${(peak / 1000).toFixed(1)} kW peak`;
   renderControlsPanel();
   const st = stats as { issues?: { severity: string; message: string }[] } | null;
   lastIssues = st?.issues ?? [];
@@ -527,7 +693,7 @@ function startTest() {
   testSnapshot = JSON.stringify(bp);
   testing = true;
   $("btn-test").textContent = "■ End Test";
-  // test world: player robot only + a dummy target block robot
+  $("test-banner").classList.remove("hidden");
   const dummy = dummyBlueprint();
   startSimWorld(bp, dummy, ARENAS.grid!, 1337, true);
   message("Test Bay active — build is read-only. End Test restores your build exactly.");
@@ -551,10 +717,12 @@ function endTest() {
   if (!editor) return;
   testing = false;
   $("btn-test").textContent = "▶ Test";
+  $("test-banner").classList.add("hidden");
   sim?.destroy();
   sim = null;
+  stopLoops();
+  particles?.clear();
   renderer?.clearRobots();
-  // restore the exact pre-test blueprint
   if (testSnapshot) {
     const bp = migrateBlueprint(JSON.parse(testSnapshot));
     if (bp) editor.loadBlueprint(bp);
@@ -567,7 +735,6 @@ function onLockIn() {
   if (!editor) return;
   if (testing) endTest();
   const bp = editor.getBlueprintSnapshot();
-  // preflight blockers
   if (!bp.parts.some((p) => PART_DEFS[p.defId]?.id === "control_core")) {
     message("Blocker: no Control Core");
     return;
@@ -581,10 +748,7 @@ function onLockIn() {
     message(`Over part limit: ${bp.parts.length}/${settings.partLimit}`);
     return;
   }
-  // floating parts check: every part must share a face with another part
-  const floating = bp.parts.find(
-    (p) => !bp.parts.some((q) => q !== p && isAdjacent(p.pos, q.pos)),
-  );
+  const floating = bp.parts.find((p) => !bp.parts.some((q) => q !== p && isAdjacent(p.pos, q.pos)));
   if (floating) {
     message("Blocker: detached part not attached to the assembly");
     return;
@@ -595,7 +759,6 @@ function onLockIn() {
     message("Blueprint locked. Waiting for opponent…");
     ($("btn-lock") as HTMLButtonElement).disabled = true;
   } else {
-    // solo: countdown then fight the AI
     const seed = (Date.now() ^ 0x9e3779b9) >>> 0;
     isAuthority = true;
     startCombat(bp, buildAiBot(), seed, arena(settings.arena), Date.now() + 3000);
@@ -606,8 +769,7 @@ function isAdjacent(a: [number, number, number], b: [number, number, number]): b
   const dx = Math.abs(a[0] - b[0]);
   const dy = Math.abs(a[1] - b[1]);
   const dz = Math.abs(a[2] - b[2]);
-  const face = (dx === 1 && dy === 0 && dz === 0) || (dx === 0 && dy === 1 && dz === 0) || (dx === 0 && dy === 0 && dz === 1);
-  return face || (dx <= 1 && dy <= 1 && dz <= 1 && dx + dy + dz > 0 && (dx === 0 || dy === 0 || dz === 0) === false);
+  return (dx === 1 && dy === 0 && dz === 0) || (dx === 0 && dy === 1 && dz === 0) || (dx === 0 && dy === 0 && dz === 1);
 }
 
 function onLeaveBuild() {
@@ -623,7 +785,12 @@ function backToMenu() {
   sim?.destroy();
   sim = null;
   ai = null;
+  stopLoops();
+  particles?.clear();
   renderer?.clearRobots();
+  renderer?.buildArena(arena("foundry"));
+  orbit!.autoRotate = true;
+  orbit!.setRadius(15);
   relay?.close();
   relay = null;
   show("menu");
@@ -631,30 +798,58 @@ function backToMenu() {
 }
 
 // ---------------------------------------------------------------------------
-// combat
+// combat sim event positions (plain xyz for the particle system)
 
-function startSimWorld(bpA: Blueprint, bpB: Blueprint, arena: ArenaDef, seed: number, testMode: boolean) {
+const tmpVec = { x: 0, y: 0, z: 0 };
+function partPos(side: number, partId: string): { x: number; y: number; z: number } | null {
+  const p = sim?.robots[side]?.parts.get(partId);
+  if (!p) return null;
+  const t = p.body.translation();
+  tmpVec.x = t.x; tmpVec.y = t.y; tmpVec.z = t.z;
+  return tmpVec;
+}
+
+function startSimWorld(bpA: Blueprint, bpB: Blueprint, arenaDef: ReturnType<typeof arena>, seed: number, testMode: boolean) {
   sim?.destroy();
-  sim = new MatchSimulation(bpA, bpB, { seed, arena });
-  sim.events.onPartDestroyed = () => {};
+  sim = new MatchSimulation(bpA, bpB, { seed, arena: arenaDef });
+  sim.events.onBigHit = (side, partId, force) => {
+    const frac = Math.min(1, force / 25000);
+    sfx.hit(frac);
+    const pos = partPos(side, partId);
+    if (pos && particles) particles.sparks(pos, Math.round(6 + frac * 18), 0.6 + frac);
+    if (shakeEnabled && renderer) renderer.addShake(0.1 + frac * 0.3);
+  };
+  sim.events.onPartDestroyed = (side, partId) => {
+    sfx.explode();
+    const pos = partPos(side, partId);
+    if (pos && particles) particles.explosion(pos);
+    if (shakeEnabled && renderer) renderer.addShake(0.4);
+  };
+  sim.events.onWeldBroken = () => {
+    sfx.weldBreak();
+  };
   renderer?.clearRobots();
-  renderer?.buildArena(arena);
+  renderer?.buildArena(arenaDef);
   renderer?.syncRobotMeshes(sim);
   orbit?.setTarget(0, 0.8, 0);
   remoteInput = [newRobotInput(), newRobotInput()];
-  if (testMode) {
-    ai = null;
-  }
+  if (testMode) ai = null;
 }
 
-function startCombat(bpA: Blueprint, bpB: Blueprint, seed: number, arena: ArenaDef, startAt: number) {
+function startCombat(bpA: Blueprint, bpB: Blueprint, seed: number, arenaDef: ReturnType<typeof arena>, startAt: number) {
   show("combat");
-  startSimWorld(bpA, bpB, arena, seed, false);
-  ai = null;
-  if (mode === "solo") {
-    ai = new AiController();
-  }
+  startSimWorld(bpA, bpB, arenaDef, seed, false);
+  ai = mode === "solo" ? new AiController() : null;
   combatDeadline = startAt + settings.combatLimitSec * 1000;
+  outcomeBeat = 0;
+  resultShown = false;
+  pendingOutcome = null;
+  desyncWarnings = 0;
+  lastChecksumPeer = "";
+  countdownLast = -1;
+  $("result-overlay").classList.add("hidden");
+  $("ko-banner").classList.add("hidden");
+  $("combat-phase").textContent = mode === "online" ? `ONLINE · ROOM ${roomCode ?? "—"}` : "SOLO VS AI";
   const cd = $("countdown");
   cd.classList.remove("hidden");
   const iv = window.setInterval(() => {
@@ -663,22 +858,36 @@ function startCombat(bpA: Blueprint, bpB: Blueprint, seed: number, arena: ArenaD
       cd.classList.add("hidden");
       window.clearInterval(iv);
     } else {
+      if (remain !== countdownLast) {
+        countdownLast = remain;
+        sfx.countdown(remain <= 1);
+      }
       cd.textContent = String(remain);
     }
-  }, 200);
-  desyncWarnings = 0;
-  lastChecksumPeer = "";
-  $("result-overlay").classList.add("hidden");
+  }, 150);
 }
 
 function showResult(playerWon: boolean | null, reason: string) {
-  const el = $("result-overlay");
-  $("result-title").textContent = playerWon === null ? "DRAW" : playerWon ? "VICTORY" : "DEFEAT";
+  stopLoops();
+  const banner = $("result-banner");
+  banner.classList.remove("win", "lose", "draw");
+  if (playerWon === null) banner.classList.add("draw");
+  else banner.classList.add(playerWon ? "win" : "lose");
+  banner.textContent = playerWon === null ? "DRAW" : playerWon ? "VICTORY" : "DEFEAT";
   $("result-reason").textContent = reason;
-  el.classList.remove("hidden");
-  if (mode === "solo") {
-    $("btn-rematch").textContent = "Rematch";
-  }
+  // match stats
+  const dur = sim ? sim.tick / 60 : 0;
+  const mm = Math.floor(dur / 60);
+  const ss = Math.floor(dur % 60);
+  const lost = sim ? sim.destroyedCount : [0, 0];
+  $("result-stats").innerHTML = `
+    <span><b>${mm}:${String(ss).padStart(2, "0")}</b>time</span>
+    <span><b>${lost[0]}</b>your parts lost</span>
+    <span><b>${lost[1]}</b>enemy parts lost</span>`;
+  $("result-overlay").classList.remove("hidden");
+  if (playerWon === null) sfx.draw();
+  else if (playerWon) sfx.victory();
+  else sfx.defeat();
 }
 
 function onRematch() {
@@ -686,7 +895,6 @@ function onRematch() {
     relay?.send("rematch", {});
     $("result-overlay").classList.add("hidden");
   } else {
-    // solo: straight back to build
     show("build");
     $("result-overlay").classList.add("hidden");
   }
@@ -697,11 +905,14 @@ function onRematch() {
 
 function frame(now: number) {
   requestAnimationFrame(frame);
+  (window as unknown as { __fps: number }).__fps = (window as unknown as { __fps: number }).__fps ? 1 : 1;
   if (!renderer) return;
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
 
   input.update();
+  if (orbit?.autoRotate) orbit.update(dt);
+
   if (relay && relay.ws?.readyState === WebSocket.OPEN) {
     pingTimer += dt;
     if (pingTimer > 2) {
@@ -733,21 +944,45 @@ function frame(now: number) {
         inB = mySlot === 1 ? { throttle: input.throttle, steer: input.steer, fire: input.fire, lift: input.lift } : remoteInput[1]!;
       }
 
-      // fixed-step accumulation
+      // fixed-step accumulation; during the KO beat, quarter-speed steps
       acc += dt;
+      const slowmo = outcomeBeat > 0;
+      const stepEvery = slowmo ? 4 : 1;
+      outcomeStepGate++;
       let steps = 0;
-      while (acc >= TICK_DT && steps < 5) {
-        sim.step([inA, inB]);
-        acc -= TICK_DT;
-        steps++;
-        if (sim.outcome) {
-          handleOutcome(sim.outcome);
-          break;
+      const maxSteps = slowmo ? 1 : 5;
+      if (!slowmo || outcomeStepGate % stepEvery === 0) {
+        sim.frozen = slowmo ? false : sim.frozen;
+        while (acc >= TICK_DT && steps < maxSteps) {
+          sim.step([inA, inB]);
+          acc -= TICK_DT;
+          steps++;
+          if (sim.outcome && !resultShown) {
+            beginOutcomeBeat(sim.outcome);
+            break;
+          }
         }
+        if (slowmo) sim.frozen = true;
+      } else {
+        acc = Math.min(acc, TICK_DT * 2);
       }
 
-      // net: send input frames at 30 Hz when online & in combat
-      if (mode === "online" && currentScreen === "combat") {
+      // audio loops for the player robot
+      const playerSide = mode === "online" ? mySlot : 0;
+      const rt = sim.robots[playerSide];
+      if (rt) {
+        const inp = playerSide === 0 ? inA : inB;
+        updateDriveSound(testing || currentScreen === "combat" ? Math.min(1, Math.abs(inp.throttle) + Math.abs(inp.steer) * 0.5) : 0);
+        let spin = 0;
+        for (const w of rt.weapons) {
+          const target = (w.def.weapon!.spinupRpm * 2 * Math.PI) / 60;
+          spin = Math.max(spin, Math.min(1, w.omega / target));
+        }
+        updateWeaponSound(spin);
+      }
+
+      // net: online combat traffic
+      if (mode === "online" && currentScreen === "combat" && !slowmo) {
         inputTimer += dt;
         if (inputTimer > 1 / 30) {
           inputTimer = 0;
@@ -763,17 +998,40 @@ function frame(now: number) {
         checksumTimer += dt;
         if (checksumTimer > 1) {
           checksumTimer = 0;
-          const h = sim.checksum();
-          relay?.send("checksum", { tick: sim.tick, hash: h });
-          lastChecksumPeer = lastChecksumPeer; // peer hash handled in message handler
+          relay?.send("checksum", { tick: sim.tick, hash: sim.checksum() });
         }
+      }
+
+      // KO beat timing
+      if (slowmo) {
+        (window as unknown as { __beat: number }).__beat = outcomeBeat;
+        outcomeBeat -= dt;
+        if (outcomeBeat <= 0) finishOutcomeBeat();
       }
 
       renderer.syncRobotMeshes(sim);
       renderer.updateFromSim(sim);
       updateCombatHud();
     }
+
+    // combat camera director: frame both robots
+    if (currentScreen === "combat" && !testing) {
+      const p0 = aiBotPose(0);
+      const p1 = aiBotPose(1);
+      const sep = Math.hypot(p0.x - p1.x, p0.z - p1.z);
+      const desired = combatCamTarget ?? { x: 0, y: 1.0, z: 0 };
+      desired.x += ((p0.x + p1.x) / 2 - desired.x) * Math.min(1, dt * 2.5);
+      desired.z += ((p0.z + p1.z) / 2 - desired.z) * Math.min(1, dt * 2.5);
+      combatCamTarget = desired;
+      orbit?.setTarget(desired.x, 0.9, desired.z);
+      const wantRadius = Math.max(7, Math.min(14, 5.5 + sep * 1.1));
+      orbit!.setRadius(orbit!.getRadius() + (wantRadius - orbit!.getRadius()) * Math.min(1, dt * 1.5));
+    }
   }
+
+  particles?.update(dt);
+
+  // build timer display
   if (currentScreen === "build" && buildDeadline > 0) {
     const remain = Math.max(0, buildDeadline - Date.now());
     const mm = Math.floor(remain / 60000);
@@ -782,7 +1040,6 @@ function frame(now: number) {
     el.textContent = `${mm}:${String(ss).padStart(2, "0")}`;
     el.classList.toggle("urgent", remain < 30000);
     if (remain === 0 && mode === "online" && !testing) {
-      // deadline: auto lock what we have
       onLockIn();
     }
   }
@@ -790,24 +1047,74 @@ function frame(now: number) {
   renderer.renderFrame();
 }
 
-function aiBotPose(side: number): { x: number; z: number; yaw: number } {
+let combatCamTarget: { x: number; y: number; z: number } | null = null;
+
+function beginOutcomeBeat(outcome: NonNullable<MatchSimulation["outcome"]>) {
+  if (resultShown || pendingOutcome) return;
+  outcomeBeat = 1.25;
+  outcomeStepGate = 0;
+  sim!.frozen = true; // gate reopens during the beat
+  if (outcome.kind === "ko") {
+    $("ko-banner").classList.remove("hidden");
+    if (shakeEnabled && renderer) renderer.addShake(0.5);
+  }
+  // remember final outcome for finishOutcomeBeat
+  pendingOutcome = outcome;
+}
+
+let pendingOutcome: NonNullable<MatchSimulation["outcome"]> | null = null;
+let resultShown = false;
+
+function finishOutcomeBeat() {
+  outcomeBeat = 0;
+  $("ko-banner").classList.add("hidden");
+  const outcome = pendingOutcome;
+  pendingOutcome = null;
+  if (!outcome || !sim) return;
+  sim.frozen = true;
+  resultShown = true;
+  if (outcome.kind === "timeout") {
+    showResult(null, "Time limit — draw");
+  } else if (outcome.kind === "ko") {
+    if (mode === "online") {
+      showResult(outcome.winner === null ? null : outcome.winner === mySlot, outcome.reason);
+    } else {
+      showResult(outcome.winner === null ? null : outcome.winner === 0, outcome.reason);
+    }
+  }
+}
+
+function aiBotPose(side: number): { x: number; y?: number; z: number; yaw: number } {
   if (!sim) return { x: 0, z: 0, yaw: 0 };
   const rt = sim.robots[side]!;
   let x = 0;
+  let y = 0;
   let z = 0;
   let n = 0;
+  // heading: average forward vector (local +z rotated by each surviving body)
+  let fx = 0;
+  let fz = 0;
   for (const p of rt.parts.values()) {
     if (p.destroyed) continue;
     const t = p.body.translation();
+    const r = p.body.rotation();
+    const wx = 2 * (r.x * r.z + r.w * r.y);
+    const wz = 1 - 2 * (r.x * r.x + r.y * r.y);
+    fx += wx;
+    fz += wz;
     x += t.x;
+    y += t.y;
     z += t.z;
     n++;
   }
   if (n) {
     x /= n;
+    y /= n;
     z /= n;
+    fx /= n;
+    fz /= n;
   }
-  return { x, z, yaw: side === 1 ? 0 : Math.PI };
+  return { x, y, z, yaw: Math.atan2(fx, fz) };
 }
 
 function updateCombatHud() {
@@ -815,18 +1122,16 @@ function updateCombatHud() {
   for (let side = 0; side < 2; side++) {
     const el = $(`status-p${side}`);
     const info = sim.debugInfo().robots[side]!;
-    const name = side === 0 ? (mode === "online" ? `P${mySlot === 0 ? "You" : "1"}` : "You") : mode === "online" ? (mySlot === 1 ? "You" : "P2") : "AI";
+    const isYou = mode === "online" ? side === mySlot : side === 0;
+    const name = mode === "online" ? (isYou ? "YOU" : "RIVAL") : side === 0 ? "YOU" : "SCRAPPER";
     const chargePct = Math.round(info.charge * 100);
     const heatPct = info.hottest ? Math.min(100, Math.round((info.hottest.temp / 170) * 100)) : 0;
-    const cond = [];
-    cond.push(info.mobility ? '<span class="ok">MOBILE</span>' : '<span class="bad">NO MOBILITY</span>');
-    cond.push(info.offense ? '<span class="ok">ARMED</span>' : '<span class="bad">UNARMED</span>');
-    cond.push(info.control ? '<span class="ok">CTRL</span>' : '<span class="bad">NO CTRL</span>');
+    const chip = (ok: boolean, warn = false) => ok ? '<span class="chip-ok">✓</span>' : warn ? '<span class="chip-warn">~</span>' : '<span class="chip-bad">✗</span>';
     el.innerHTML = `
-      <div class="name">${name} · ${info.mass.toFixed(0)}kg · ${info.partsAlive}/${info.partsTotal} parts</div>
+      <div class="name" style="color:${side === 0 ? "#7fd0e8" : "#e8a07f"}">${name} · ${info.mass.toFixed(0)}kg · ${info.partsAlive}/${info.partsTotal}</div>
       <div class="bar"><div style="width:${chargePct}%" class="${chargePct < 20 ? "low" : ""}"></div></div>
       <div class="bar"><div class="heat ${heatPct > 65 ? "low" : ""}" style="width:${heatPct}%"></div></div>
-      <div class="cond">${cond.join(" · ")}</div>`;
+      <div class="cond">MOB ${chip(info.mobility)} · ARM ${chip(info.offense)} · CTRL ${chip(info.control)}${info.destroyedTimer > 0 ? ` · KO ${info.destroyedTimer.toFixed(1)}s` : ""}</div>`;
   }
   const remain = Math.max(0, combatDeadline - Date.now());
   const mm = Math.floor(remain / 60000);
@@ -836,7 +1141,7 @@ function updateCombatHud() {
   if (debugVisible) {
     const info = sim.debugInfo();
     $("debug-overlay").textContent =
-      `tick ${info.tick} · ping ${ping ? "?" : "—"}\n` +
+      `tick ${info.tick} · ping ${ping || "—"}ms\n` +
       `authority: ${isAuthority ? "yes" : "no"} · desync warnings: ${desyncWarnings}\n` +
       info.robots
         .map(
@@ -847,23 +1152,16 @@ function updateCombatHud() {
   }
 }
 
-function handleOutcome(outcome: NonNullable<MatchSimulation["outcome"]>) {
-  if (outcome.kind === "timeout") {
-    showResult(null, "Time limit — draw");
-  } else if (outcome.kind === "ko") {
-    if (mode === "online") {
-      showResult(outcome.winner === null ? null : outcome.winner === mySlot, outcome.reason);
-    } else {
-      showResult(outcome.winner === null ? null : outcome.winner === 0, outcome.reason);
-    }
-    if (mode === "online") relay?.send("checksum", { tick: sim!.tick, hash: sim!.checksum() });
+// combat deadline timeout → draw (mirrors the Room DO)
+setInterval(() => {
+  if (sim && !sim.outcome && !resultShown && currentScreen === "combat" && !testing && combatDeadline > 0 && Date.now() >= combatDeadline) {
+    sim.frozen = true;
+    sim.outcome = { kind: "timeout", winner: null, reason: "time-limit" };
+    beginOutcomeBeat(sim.outcome);
   }
-}
+}, 250);
 
 boot().catch((err) => {
-  const el = document.createElement("pre");
-  el.style.cssText = "position:fixed;top:10px;left:10px;color:#f66;z-index:99;white-space:pre-wrap;";
-  el.textContent = `Boot failed: ${err}`;
-  document.body.appendChild(el);
-  throw err;
+  bootFail(`Boot failed: ${err}. Try a current version of Firefox or Chromium.`);
+  console.error(err);
 });

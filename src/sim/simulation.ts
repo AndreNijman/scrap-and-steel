@@ -70,6 +70,9 @@ export class MatchSimulation {
   arena: ArenaDef;
   outcome: MatchOutcome = null;
   events: SimEvents = {};
+  /** Set when the match ends; the client may unfreeze briefly for a slow-mo beat. */
+  frozen = false;
+  destroyedCount: [number, number] = [0, 0];
   private powerNets: [PowerNet | null, PowerNet | null] = [null, null];
   private defeatTimer = 0;
   private staticBodies: PhysicsHandle[] = [];
@@ -113,7 +116,7 @@ export class MatchSimulation {
 
   /** Apply one fixed step. inputs: per-side control state. */
   step(inputs: [RobotInput, RobotInput]) {
-    if (this.outcome) return;
+    if (this.frozen) return;
     this.tick++;
     const dt = TICK_DT;
 
@@ -351,7 +354,8 @@ export class MatchSimulation {
       if (wepSide) {
         const { rt: wrt, partId: wpid, def: wdef } = wepSide;
         const victim = wrt === pa.rt ? pb : pa;
-        const mult = wdef.weapon!.damageMult * Math.min((wrt.parts.get(wpid)?.spinOmega ?? 0) / 40, 1.6);
+        const spinFrac = (wrt.parts.get(wpid)?.spinOmega ?? 0) / 60;
+        const mult = wdef.weapon!.damageMult * Math.max(0.15, Math.min(spinFrac, 0.45));
         this.damagePart(victim.rt, victim.partId, force * DAMAGE_SCALE * mult, wdef.weapon!.kind);
         this.damagePart(wrt, wpid, force * DAMAGE_SCALE * 0.15, null); // recoil into own frame
       } else {
@@ -417,6 +421,7 @@ export class MatchSimulation {
     }
     if (p.hp <= 0) {
       p.destroyed = true;
+      this.destroyedCount[rt.side]++;
       // detach: remove remaining welds
       for (const wid of [...p.welds]) {
         const w = welds.get(wid);
@@ -484,6 +489,7 @@ export class MatchSimulation {
   }
 
   private evaluateDefeat() {
+    if (this.outcome) return; // sticky: first verdict stands
     const res = [
       evaluateDefeat(this.robots[0], (rt) => this.functionalParts(rt)),
       evaluateDefeat(this.robots[1], (rt) => this.functionalParts(rt)),
@@ -500,6 +506,7 @@ export class MatchSimulation {
       const both = t0 >= 3 && t1 >= 3;
       this.robots[0].isDestroyed = t0 >= 3;
       this.robots[1].isDestroyed = t1 >= 3;
+      this.frozen = true;
       this.outcome = both
         ? { kind: "ko", winner: null, reason: "double-knockout" }
         : t0 >= 3
