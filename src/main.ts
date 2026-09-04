@@ -2,7 +2,7 @@
 // Boot, menu, workshop (build/test), diagnostics, battles (bots + online 1v1).
 
 import type { Blueprint, SavedBlueprint } from "./game/blueprint";
-import { emptyBlueprint, cloneBlueprint, preflight, robotStats, portWorldPos, saveBlueprint, listSaved, deleteBlueprint, migrateBlueprint, uid, type PlacedPart } from "./game/blueprint";
+import { emptyBlueprint, cloneBlueprint, preflight, robotStats, portWorldPos, saveBlueprint, listSaved, deleteBlueprint, migrateBlueprint, blueprintHash, uid, type PlacedPart } from "./game/blueprint";
 import { part, CELL, CATEGORY_LIST, type Category } from "./game/parts";
 import { Builder } from "./game/builder";
 import { Simulation, TICK, type BotDriver } from "./game/sim";
@@ -319,7 +319,10 @@ function bindGameUi() {
   $("btn-export").onclick = () => doExport();
   $("btn-import").onclick = () => doImport();
   $("btn-menu").onclick = () => { relay?.close(); relay = null; showScreen("menu"); checkRelay(); };
-  $("btn-lock").onclick = () => { if (battleKind === "bot") startMatchVsBot(); };
+  $("btn-lock").onclick = () => {
+    if (battleKind === "bot") startMatchVsBot();
+    else if (battleKind === "online") onLockOnline();
+  };
   $("btn-lobby-ready").onclick = () => { relay?.send("set_ready", { ready: true }); sfx.uiClick(); };
   $("btn-lobby-leave").onclick = () => { relay?.close(); relay = null; battleKind = null; $("lobby-bar").classList.add("hidden"); $("btn-lock").classList.add("hidden"); };
   $("btn-rematch").onclick = () => {
@@ -539,6 +542,20 @@ function onCanvasMove(e: PointerEvent) {
 // =========================================================================
 // battles
 
+function onLockOnline() {
+  if (!editor2dReady()) return;
+  const valid = preflight(bp, lobbySettings.budgetSp);
+  const blockers = valid.filter((v) => !v.ok && !v.warn);
+  if (blockers.length) { toast("BLOCKED: " + blockers[0]!.text); return; }
+  relay?.send("lock_blueprint", { hash: blueprintHash(bp), blueprint: bp });
+  toast("Blueprint locked. Waiting for opponent…");
+  ($("btn-lock") as HTMLButtonElement).disabled = true;
+}
+
+function editor2dReady(): boolean {
+  return true;
+}
+
 function startMatchVsBot() {
   const valid = preflight(bp, lobbySettings.budgetSp);
   const blockers = valid.filter((v) => !v.ok && !v.warn);
@@ -640,6 +657,7 @@ function handleRelay(t: string, payload: unknown) {
       lobbySettings = { ...lobbySettings, ...(p.settings as typeof lobbySettings) };
       $("lobby-bar").classList.add("hidden");
       $("btn-lock").classList.remove("hidden");
+      ($("btn-lock") as HTMLButtonElement).disabled = false;
       $("btn-lock").textContent = "LOCK IN ▸";
       toast("BUILD PHASE — lock in when ready");
       refreshPanels();
