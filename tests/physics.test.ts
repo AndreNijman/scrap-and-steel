@@ -84,6 +84,26 @@ describe("2D physics fixtures", () => {
     expect(rt.lastResult.mobility).toBe(true); // hardware path intact
   });
 
+  it("motors bolted to the chassis drive wheels under the frame (no adjacency trap)", { timeout: 30000 }, () => {
+    const bp = cartBp();
+    // move the motors UP one row so they are NOT adjacent to the wheels
+    for (const p of bp.parts) {
+      if (p.id === "m1" || p.id === "m2") p.y = -1;
+    }
+    bp.parts.push({ id: "frame3", def: "steel_block", x: 1, y: 1, rot: 0 });
+    bp.parts.push({ id: "frame4", def: "steel_block", x: 2, y: 1, rot: 0 });
+    const sim = new Simulation({ bpA: bp, bpB: null, arena: ARENAS.range!, seed: 9 });
+    const rt = sim.robots[0]!;
+    rt.input = { forward: 1, back: 0, fire: 0, aux: 0, turret: 0 };
+    for (let i = 0; i < 60; i++) sim.step(1 / 60);
+    expect(rt.defeated).toBe(false); // no instant defeat
+    expect(rt.lastResult.mobility).toBe(true);
+    const x0 = rt.phys.rootBody!.getPosition().x;
+    for (let i = 0; i < 180; i++) sim.step(1 / 60);
+    const x1 = rt.phys.rootBody!.getPosition().x;
+    expect(x1 - x0).toBeGreaterThan(1.5);
+  });
+
   it("runs 600 ticks without NaN in any body transform", { timeout: 60000 }, () => {
     const sim = new Simulation({ bpA: cartBp(), bpB: cartBp(), arena: ARENAS.range!, seed: 11 });
     sim.robots[0]!.input = { forward: 1, back: 0, fire: 1, aux: 0, turret: 0 };
