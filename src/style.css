@@ -138,7 +138,7 @@ button:hover { border-color: var(--accent); }
 #logic-cats button { font-size: 9px; padding: 3px 7px; }
 #logic-canvas-host { flex: 1; position: relative; min-height: 0; }
 #logic-canvas-host canvas { position: absolute; inset: 0; }
-#logic-props { padding: 6px 9px; border-top: 1px solid var(--edge); font-size: 10px; max-height: 64px; overflow-y: auto; }
+#logic-props { padding: 6px 9px; border-top: 1px solid var(--edge); font-size: 10px; height: 58px; overflow-y: auto; flex-shrink: 0; }
 #logic-props select, #logic-props input {
   font-family: var(--mono); font-size: 10px; background: var(--bg); color: var(--text);
   border: 1px solid var(--edge2); padding: 2px 5px; margin-left: 6px;

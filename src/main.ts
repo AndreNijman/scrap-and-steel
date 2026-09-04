@@ -832,12 +832,18 @@ function doImport() {
   $("bp-close").onclick = closeModal;
 }
 
+let logicResizeObserver: ResizeObserver | null = null;
+
 function logicEditorRebind() {
   logicEditor = new LogicEditor(bp, () => refreshPanels(), (nodeId) => renderLogicProps(nodeId));
   const host = $("logic-canvas-host");
   host.innerHTML = "";
   logicEditor.mount(host);
   logicEditor.visible = true;
+  // keep the backing store in sync with layout changes, or hitboxes drift
+  logicResizeObserver?.disconnect();
+  logicResizeObserver = new ResizeObserver(() => logicEditor?.resize());
+  logicResizeObserver.observe(host);
 }
 
 // =========================================================================
@@ -1070,6 +1076,14 @@ function renderLogicProps(nodeId: string | null) {
       html += `${p.label}: <input type="number" step="0.1" value="${n.params[p.key] ?? 0}" data-node="${n.id}" data-param="${p.key}">`;
     } else if (p.kind === "target") {
       const opts = targetOptions(bp, p.options ?? []);
+      const bound = String(n.params[p.key] ?? "");
+      const stillThere = !bound || opts.some((o) => o.id === bound);
+      if (bound && !stillThere) opts.unshift({ id: bound, label: `${bound.slice(-4)} (deleted)` });
+      if (!opts.length) {
+        const what = (p.options ?? [])[0] ?? "part";
+        html += `${p.label}: <span style="color:var(--warn)">no ${what} placed yet — place one, then click this node again</span>`;
+        continue;
+      }
       html += `${p.label}: <select data-node="${n.id}" data-param="${p.key}"><option value="">—</option>${opts.map((o) => `<option value="${o.id}" ${n.params[p.key] === o.id ? "selected" : ""}>${o.label}</option>`).join("")}</select>`;
     }
   }
@@ -1373,15 +1387,19 @@ function renderBuildOverlays(ctx: CanvasRenderingContext2D) {
       }
     }
   }
-  // hover outline
-  if (hoverPartId && builder.tool !== "place") {
-    const p = bp.parts.find((q) => q.id === hoverPartId);
-    if (p) {
-      const d = part(p.def);
-      const r = { x: p.x, y: p.y, w: d.w, h: d.h };
-      ctx.strokeStyle = "rgba(120,200,255,0.7)";
-      ctx.strokeRect(tx(r.x * CELL), ty((r.y + r.h) * CELL), r.w * CELL * z, r.h * CELL * z);
-    }
+  // hover + selection outlines (y-down: box top is at r.y)
+  const outline = (partId: string | null, color: string, lineWidth: number) => {
+    const p = bp.parts.find((q) => q.id === partId);
+    if (!p) return;
+    const d = part(p.def);
+    const r = { x: p.x, y: p.y, w: d.w, h: d.h };
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.strokeRect(tx(r.x * CELL), ty(r.y * CELL), r.w * CELL * z, r.h * CELL * z);
+  };
+  if (builder.tool !== "place") {
+    if (hoverPartId && hoverPartId !== selectedPartId) outline(hoverPartId, "rgba(120,200,255,0.7)", 1);
+    outline(selectedPartId, "#ffd866", 2);
   }
 }
 
@@ -1516,6 +1534,7 @@ Object.defineProperty(window as unknown as { __zoom: number }, "__zoom", { get: 
       : null,
   }),
   bp: () => bp,
+  addNode: (type: string) => logicEditor?.addNode(type),
   pick: (clientX: number, clientY: number) => {
     const e = { clientX, clientY } as PointerEvent;
     return screenToCell(e);
