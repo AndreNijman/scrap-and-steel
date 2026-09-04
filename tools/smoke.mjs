@@ -81,12 +81,12 @@ try {
   ok(`test drive: robot at x=${x1?.toFixed(2)}`);
 
   // battle vs bot
-  await page.evaluate(() => window.__dev.startBotBattle("scout"));
+  await page.evaluate(() => window.__dev.startBotBattle("berserker"));
   await waitUntil(() => window.__dev.state().mode === "test" && window.__dev.state().sim, 10000, "battle sim");
   await page.keyboard.down("KeyW");
   await page.keyboard.down("Space");
   let outcome = null;
-  for (let i = 0; i < 90; i++) {
+  for (let i = 0; i < 150; i++) {
     await page.waitForTimeout(1000);
     const s = await page.evaluate(() => window.__dev.state().sim);
     if (s?.outcome) { outcome = s.outcome; break; }

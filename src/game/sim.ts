@@ -335,7 +335,9 @@ export class Simulation {
     if (ex?.heatProof && pb.temp > 60) final *= 0.6;
     pb.hp -= final;
     side.phys.impactAcc.set(partId, final);
-    if (pb.hp <= 0) {
+    if (pb.hp <= 0 && !pb.destroyed) {
+      pb.destroyed = true; // mark first: splash recursion must see it as gone
+      side.partsLost++;
       // ammo explosion
       if (ex?.ammo) {
         const pos = pb.body.getPosition();
@@ -345,7 +347,7 @@ export class Simulation {
           if (other.destroyed) continue;
           const op = other.body.getPosition();
           const dist = Math.hypot(op.x - pos.x, op.y - pos.y);
-          if (dist < 2.5) this.damagePart(side, pid, 90 * (1 - dist / 2.5));
+          if (dist < 2.5 && pid !== partId) this.damagePart(side, pid, 90 * (1 - dist / 2.5));
         }
         const enemy = this.enemyOf(side);
         if (enemy) {
@@ -354,11 +356,10 @@ export class Simulation {
           if (dist < 3) this.damagePart(enemy, enemy.bp.parts[0]!.id, 60);
         }
       }
+      const pos = pb.body.getPosition();
       destroyPartBody(side.phys, partId);
-      side.partsLost++;
       this.events.onPartDestroyed?.(side.index, partId);
-      const pos = side.phys.bodies.get(partId)?.body.getPosition();
-      if (pos) this.events.onExplosion?.(pos.x, pos.y, false);
+      this.events.onExplosion?.(pos.x, pos.y, false);
     }
   }
 
