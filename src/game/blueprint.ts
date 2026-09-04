@@ -235,7 +235,7 @@ export function preflight(bp: Blueprint, maxMass: number): ChecklistItem[] {
   const guns = bp.parts.filter((p) => ["cannon", "rotary", "rail", "missile"].includes(part(p.def).weapon?.kind ?? ""));
   if (guns.length > 0 && ammo.length === 0) items.push({ ok: false, warn: true, text: "⚠ Weapon has no ammunition box" });
 
-  items.push({ ok: st.mass <= maxMass, warn: false, text: `Mass ${Math.round(st.mass)} / ${maxMass} kg` });
+  items.push({ ok: st.mass <= maxMass, warn: false, text: Number.isFinite(maxMass) ? `Mass ${Math.round(st.mass)} / ${maxMass} kg` : `Mass ${Math.round(st.mass)} kg — sandbox (no limit)` });
   return items;
 }
 

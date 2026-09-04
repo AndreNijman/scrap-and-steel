@@ -97,6 +97,11 @@ function toast(msg: string) {
   toastTimer = 2.4;
 }
 
+/** Sandbox has no mass cap; battles use the lobby mass limit. */
+function maxMassFor(): number {
+  return battleKind === null ? Infinity : lobbySettings.budgetSp;
+}
+
 function checkRelay() {
   const el = $("menu-relay");
   fetch(`${resolveRelayUrl().replace(/^ws/, "http")}/health`, { signal: AbortSignal.timeout(4000) })
@@ -210,7 +215,7 @@ function setMode(m: Mode) {
   if (m === "test") {
     // immutable snapshot
     testSnapshot = JSON.stringify(bp);
-    const valid = preflight(bp, lobbySettings.budgetSp);
+    const valid = preflight(bp, maxMassFor());
     const blockers = valid.filter((v) => !v.ok && !v.warn);
     if (blockers.length) {
       toast("BLOCKED: " + blockers[0]!.text);
@@ -335,7 +340,7 @@ function bindGameUi() {
     enterWorkshop();
   };
 
-  // logic categories
+  // logic node picker: category button opens a dropdown of that category's node types
   const cats = $("logic-cats");
   const catDefs: [string, string[]][] = [
     ["IN", ["key_forward", "key_back", "key_fire", "key_aux", "key_turret", "sensor_value", "constant"]],
@@ -344,27 +349,40 @@ function bindGameUi() {
     ["FLOW", ["select", "toggle", "latch", "timer", "delay", "counter", "pid"]],
     ["OUT", ["motor_power", "servo_target", "weapon_fire", "brake"]],
   ];
+  let openPicker: HTMLDivElement | null = null;
+  const closePicker = () => { openPicker?.remove(); openPicker = null; };
   for (const [label, types] of catDefs) {
     const b = document.createElement("button");
     b.textContent = label;
-    b.title = types.map((t) => NODE_DEFS[t]?.name ?? t).join(", ");
+    b.title = "Add a " + label + " node";
     b.onclick = () => {
-      logicEditor?.addNode(types[0]!);
-      // cycling through the category on repeated clicks
-      const cur = types.indexOf(logicEditor ? lastAddedType : "");
-      void cur;
-    };
-    let idx = 0;
-    const orig = b.onclick;
-    b.onclick = () => {
-      const t = types[idx % types.length]!;
-      idx++;
-      logicEditor?.addNode(t);
-      lastAddedType = t;
-      orig;
+      if (openPicker) { closePicker(); return; }
+      const picker = document.createElement("div");
+      picker.style.cssText = "position:absolute;bottom:100%;left:0;background:var(--panel);border:1px solid var(--edge2);z-index:30;max-height:260px;overflow-y:auto;min-width:300px";
+      for (const t of types) {
+        const def = NODE_DEFS[t];
+        if (!def) continue;
+        const row = document.createElement("div");
+        row.style.cssText = "padding:6px 10px;cursor:pointer;border-bottom:1px solid var(--edge)";
+        row.innerHTML = `<div style="color:var(--accent2);font-size:10px">${def.name}</div><div style="color:var(--dim);font-size:9px">${def.desc}</div>`;
+        row.onmouseenter = () => (row.style.background = "var(--panel3)");
+        row.onmouseleave = () => (row.style.background = "");
+        row.onclick = (e) => {
+          e.stopPropagation();
+          logicEditor?.addNode(t);
+          closePicker();
+        };
+        picker.appendChild(row);
+      }
+      cats.style.position = "relative";
+      cats.appendChild(picker);
+      openPicker = picker;
     };
     cats.appendChild(b);
   }
+  document.addEventListener("pointerdown", (e) => {
+    if (openPicker && !openPicker.contains(e.target as Node) && !(e.target as HTMLElement).closest?.("#logic-cats")) closePicker();
+  });
   $("logic-del").onclick = () => logicEditor?.deleteSelected();
 
   // keyboard
@@ -402,7 +420,6 @@ function bindGameUi() {
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
-let lastAddedType = "";
 let dragging: { kind: "pan" | "part"; id?: string; startX: number; startY: number; origX?: number; origY?: number; multi?: boolean } | null = null;
 const buildMouseCell = { x: 0, y: 0 };
 
@@ -553,7 +570,7 @@ function onCanvasMove(e: PointerEvent) {
 
 function onLockOnline() {
   if (!editor2dReady()) return;
-  const valid = preflight(bp, lobbySettings.budgetSp);
+  const valid = preflight(bp, maxMassFor());
   const blockers = valid.filter((v) => !v.ok && !v.warn);
   if (blockers.length) { toast("BLOCKED: " + blockers[0]!.text); return; }
   relay?.send("lock_blueprint", { hash: blueprintHash(bp), blueprint: bp });
@@ -566,7 +583,7 @@ function editor2dReady(): boolean {
 }
 
 function startMatchVsBot() {
-  const valid = preflight(bp, lobbySettings.budgetSp);
+  const valid = preflight(bp, maxMassFor());
   const blockers = valid.filter((v) => !v.ok && !v.warn);
   if (blockers.length) { toast("BLOCKED: " + blockers[0]!.text); return; }
   battleKind = "bot";
@@ -822,12 +839,12 @@ function logicEditorRebind() {
 function refreshPanels() {
   if (screen !== "game") return;
   const st = robotStats(bp);
-  const maxMass = lobbySettings.budgetSp;
-  $("mass-num").textContent = `${Math.round(st.mass)}/${maxMass}`;
+  const maxMass = maxMassFor();
+  const limited = Number.isFinite(maxMass);
+  $("mass-num").textContent = limited ? `${Math.round(st.mass)}/${maxMass}` : `${Math.round(st.mass)} kg — no limit`;
   const fill = $("mass-fill");
-  const frac = Math.min(1.2, st.mass / maxMass);
-  fill.style.width = `${Math.min(100, frac * 100)}%`;
-  fill.className = frac > 1 ? "over" : frac > 0.85 ? "warn" : "";
+  fill.style.width = limited ? `${Math.min(100, (st.mass / maxMass) * 100)}%` : "0%";
+  fill.className = !limited ? "" : st.mass > maxMass ? "over" : st.mass > maxMass * 0.85 ? "warn" : "";
 
   const hasCpu = st.cpuProvided >= st.cpuUsed;
   $("robot-info").innerHTML = `
