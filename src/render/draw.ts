@@ -3,7 +3,7 @@
 // wires (colored looms with flow animation), particles, projectiles and overlays.
 
 import planck from "planck-js";
-import type { Simulation } from "../game/sim";
+import type { Simulation, RobotSide } from "../game/sim";
 import type { Blueprint } from "../game/blueprint";
 import { partRect } from "../game/blueprint";
 import { part, CELL } from "../game/parts";
@@ -112,7 +112,9 @@ export class WorldRenderer {
     }
 
     if (buildMode && bpA) {
-      this.renderBuild(ctx, bpA, tx, ty, z);
+      // build view: y-DOWN, matching blueprint space (row 0 = top)
+      const tyDown = (my: number) => camScreenY + (my - this.camY) * z;
+      this.renderBuild(ctx, bpA, tx, tyDown, z);
     } else if (sim) {
       this.renderSim(ctx, sim, tx, ty, z, w, h);
     }
@@ -130,9 +132,14 @@ export class WorldRenderer {
     ctx.globalAlpha = 1;
   }
 
-  private renderBuild(ctx: CanvasRenderingContext2D, bp: Blueprint, tx: (m: number) => number, ty: (m: number) => number, z: number) {
-    // ground line
-    const gy = ty(0);
+  private renderBuild(ctx: CanvasRenderingContext2D, bp: Blueprint, tx: (m: number) => number, tyDown: (m: number) => number, z: number) {
+    // ground line: one row below the lowest built part (blueprint y grows down)
+    let maxRow = 2;
+    for (const p of bp.parts) {
+      const r = partRect(p);
+      maxRow = Math.max(maxRow, r.y + r.h);
+    }
+    const gy = tyDown(maxRow * CELL);
     ctx.fillStyle = "#2a2620";
     ctx.fillRect(0, gy, ctx.canvas.width, ctx.canvas.height - gy);
     ctx.fillStyle = "#3a3428";
@@ -147,7 +154,7 @@ export class WorldRenderer {
       for (let x = startX; x < ctx.canvas.width; x += gridPx) {
         ctx.beginPath(); ctx.moveTo(Math.floor(x) + 0.5, 0); ctx.lineTo(Math.floor(x) + 0.5, ctx.canvas.height); ctx.stroke();
       }
-      const startY = ty(0) % gridPx;
+      const startY = tyDown(0) % gridPx;
       for (let y = startY; y < ctx.canvas.height; y += gridPx) {
         ctx.beginPath(); ctx.moveTo(0, Math.floor(y) + 0.5); ctx.lineTo(ctx.canvas.width, Math.floor(y) + 0.5); ctx.stroke();
       }
@@ -156,12 +163,56 @@ export class WorldRenderer {
       ctx.beginPath(); ctx.moveTo(0, Math.floor(gy) + 0.5); ctx.lineTo(ctx.canvas.width, Math.floor(gy) + 0.5); ctx.stroke();
     }
 
-    // wires
-    this.renderWires(ctx, bp, tx, ty, null);
+    // wires (blueprint port positions, y-down)
+    this.renderWires(ctx, bp, (partId, portIdx) => {
+      const pos = portPosMeters(bp, partId, portIdx);
+      return pos ? { x: tx(pos.x), y: tyDown(pos.y) } : null;
+    }, null, this.showPowerFlow);
 
     // parts
     for (const p of bp.parts) {
-      this.drawPartStatic(ctx, p, tx, ty, z);
+      this.drawPartStatic(ctx, p, tx, tyDown, z);
+    }
+  }
+
+  /** Wire looms. toScreen resolves an endpoint to SCREEN px; net optional (flow/trip). */
+  private renderWires(
+    ctx: CanvasRenderingContext2D,
+    bp: Blueprint,
+    toScreen: (partId: string, portIdx: number) => { x: number; y: number } | null,
+    sim: RobotSide | null,
+    showFlow: boolean,
+  ) {
+    for (const wire of bp.wires) {
+      const a = toScreen(wire.a.part, wire.a.port);
+      const b = toScreen(wire.b.part, wire.b.port);
+      if (!a || !b) continue;
+      const rt = sim ? sim.net.wires.get(wire.id) : null;
+      const color = rt?.tripped ? "#5a5a5a" : rt?.broken ? "#3a2020" : wireColor(bp, wire);
+      const ax = a.x;
+      const ay = a.y;
+      const bx = b.x;
+      const by = b.y;
+      const midY = (ay + by) / 2;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(ax, ay);
+      ctx.lineTo(ax, midY);
+      ctx.lineTo(bx, midY);
+      ctx.lineTo(bx, by);
+      ctx.stroke();
+      if (sim && showFlow && rt && !rt.tripped && !rt.broken && rt.amps > 0.3) {
+        const t = (this.time * 2) % 1;
+        ctx.fillStyle = "#ffe8a0";
+        for (const [x1, y1, x2, y2] of [[ax, ay, ax, midY], [ax, midY, bx, midY], [bx, midY, bx, by]] as [number, number, number, number][]) {
+          const dx = x2 - x1;
+          const dy = y2 - y1;
+          const px = x1 + dx * t;
+          const py = y1 + dy * t;
+          ctx.fillRect(px - 2, py - 2, 4, 4);
+        }
+      }
     }
   }
 
@@ -169,7 +220,7 @@ export class WorldRenderer {
     const d = part(p.def);
     const r = partRect(p);
     const x = tx(r.x * CELL);
-    const y = ty((r.y + r.h) * CELL);
+    const y = ty(r.y * CELL);
     const wPx = r.w * CELL * z;
     const hPx = r.h * CELL * z;
     const sprite = getSprite(p.def, d.w, d.h);
@@ -202,46 +253,6 @@ export class WorldRenderer {
     }
   }
 
-  private renderWires(ctx: CanvasRenderingContext2D, bp: Blueprint, tx: (m: number) => number, ty: (m: number) => number, sim: Simulation | null) {
-    for (const wire of bp.wires) {
-      const a = bp.parts.find((p) => p.id === wire.a.part);
-      const b = bp.parts.find((p) => p.id === wire.b.part);
-      if (!a || !b) continue;
-      const pa = portPosMeters(bp, wire.a.part, wire.a.port);
-      const pb = portPosMeters(bp, wire.b.part, wire.b.port);
-      if (!pa || !pb) continue;
-      const rt = sim?.robots[0]?.net.wires.get(wire.id);
-      const color = rt?.tripped ? "#5a5a5a" : rt?.broken ? "#3a2020" : wireColor(bp, wire);
-      const ax = tx(pa.x);
-      const ay = ty(pa.y);
-      const bx = tx(pb.x);
-      const by = ty(pb.y);
-      // orthogonal loom with a mid bend
-      const midY = (ay + by) / 2;
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(ax, midY);
-      ctx.lineTo(bx, midY);
-      ctx.lineTo(bx, by);
-      ctx.stroke();
-      // animated flow dots when powered
-      if (sim && this.showPowerFlow && rt && !rt.tripped && !rt.broken && rt.amps > 0.3) {
-        const t = (this.time * 2) % 1;
-        ctx.fillStyle = "#ffe8a0";
-        for (const [x1, y1, x2, y2] of [[ax, ay, ax, midY], [ax, midY, bx, midY], [bx, midY, bx, by]] as [number, number, number, number][]) {
-          const dx = x2 - x1;
-          const dy = y2 - y1;
-          const len = Math.hypot(dx, dy) || 1;
-          void len;
-          const px = x1 + dx * t;
-          const py = y1 + dy * t;
-          ctx.fillRect(px - 2, py - 2, 4, 4);
-        }
-      }
-    }
-  }
 
   private renderSim(ctx: CanvasRenderingContext2D, sim: Simulation, tx: (m: number) => number, ty: (m: number) => number, z: number, w: number, h: number) {
     const arena = sim.arena;
@@ -297,10 +308,20 @@ export class WorldRenderer {
     ctx.fillRect(tx(-1.5), ty(8), 1.5 * z, 8 * z);
     ctx.fillRect(tx(arena.width + 0.5), ty(8), 1.5 * z, 8 * z);
 
-    // wires for both robots
+    // wires for both robots (live body positions)
     for (const side of sim.robots) {
       if (!side) continue;
-      this.renderWires(ctx, side.bp, tx, ty, sim);
+      this.renderWires(ctx, side.bp, (partId, portIdx) => {
+        const pb = side.phys.bodies.get(partId);
+        const def = pb && !pb.destroyed ? pb.def : side.bp.parts.find((q) => q.id === partId) ? part(side.bp.parts.find((q) => q.id === partId)!.def) : null;
+        if (pb && !pb.destroyed) {
+          const pos = pb.body.getPosition();
+          return { x: tx(pos.x), y: ty(pos.y) };
+        }
+        const pos = portPosMeters(side.bp, partId, portIdx);
+        return pos ? { x: tx(pos.x), y: ty(pos.y) } : null;
+        void def;
+      }, side, this.showPowerFlow);
     }
 
     // robots

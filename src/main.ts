@@ -417,6 +417,14 @@ function screenToCell(e: PointerEvent): { x: number; y: number } {
   const r = canvas.getBoundingClientRect();
   const sx = e.clientX - r.left;
   const sy = e.clientY - r.top;
+  const cellPx = CELL * renderer.zoom;
+  if (mode === "build") {
+    // build view: y-DOWN cell space, matching the blueprint (row 0 = top)
+    const cx = renderer.camX / CELL + (sx - canvas.width / 2) / cellPx;
+    const cy = renderer.camY / CELL + (sy - canvas.height * 0.62) / cellPx;
+    return { x: Math.floor(cx), y: Math.floor(cy) };
+  }
+  // test view: physics y-up
   const mx = renderer.camX + (sx - canvas.width / 2) / renderer.zoom;
   const my = renderer.camY + (canvas.height * 0.62 - sy) / renderer.zoom;
   return { x: Math.floor(mx / CELL), y: Math.floor(-my / CELL) };
@@ -505,7 +513,8 @@ function onCanvasMove(e: PointerEvent) {
   }
   if (dragging?.kind === "pan") {
     renderer.camX -= (e.clientX - dragging.startX) / renderer.zoom;
-    renderer.camY += (e.clientY - dragging.startY) / renderer.zoom;
+    if (mode === "build") renderer.camY -= (e.clientY - dragging.startY) / renderer.zoom;
+    else renderer.camY += (e.clientY - dragging.startY) / renderer.zoom;
     dragging.startX = e.clientX;
     dragging.startY = e.clientY;
     return;
@@ -1198,14 +1207,14 @@ function frameBody(now: number) {
 function renderBuildOverlays(ctx: CanvasRenderingContext2D) {
   const z = renderer.zoom;
   const tx = (mx: number) => canvas.width / 2 + (mx - renderer.camX) * z;
-  const ty = (my: number) => canvas.height * 0.62 - (my - renderer.camY) * z;
+  const ty = (my: number) => canvas.height * 0.62 + (my - renderer.camY) * z; // y-down: my in blueprint meters
   // ghost
   if (builder.ghost && builder.placeDefId) {
     const d = part(builder.placeDefId);
     const gw = (builder.rot === 1 || builder.rot === 3 ? d.h : d.w) * CELL * z;
     const gh = (builder.rot === 1 || builder.rot === 3 ? d.w : d.h) * CELL * z;
     const gx = tx(builder.ghost.x * CELL);
-    const gy = ty((builder.ghost.y + (builder.rot === 1 || builder.rot === 3 ? d.w : d.h)) * CELL);
+    const gy = ty(builder.ghost.y * CELL);
     ctx.globalAlpha = 0.4;
     ctx.fillStyle = builder.ghost.valid ? "#5fbf5f" : "#c05038";
     ctx.fillRect(gx, gy, gw, gh);
@@ -1302,6 +1311,10 @@ Object.defineProperty(Simulation.prototype, "checksumNet", {
 boot();
 
 // dev/testing hooks
+(window as unknown as { __camX: number }).__camX = 0;
+Object.defineProperty(window as unknown as { __camX: number }, "__camX", { get: () => renderer?.camX ?? 0 });
+Object.defineProperty(window as unknown as { __camY: number }, "__camY", { get: () => renderer?.camY ?? 0 });
+Object.defineProperty(window as unknown as { __zoom: number }, "__zoom", { get: () => renderer?.zoom ?? 42 });
 (window as unknown as { __dev: unknown }).__dev = {
   loadBot: (id: string) => {
     const spec = BOT_SPECS.find((b) => b.id === id);
@@ -1383,4 +1396,16 @@ boot();
       : null,
   }),
   bp: () => bp,
+  pick: (clientX: number, clientY: number) => {
+    const e = { clientX, clientY } as PointerEvent;
+    return screenToCell(e);
+  },
+  partScreenPos: (partId: string) => {
+    const p = bp.parts.find((q) => q.id === partId);
+    if (!p) return null;
+    const z = renderer!.zoom;
+    const x = canvas.width / 2 + (p.x * CELL - renderer!.camX) * z + canvas.getBoundingClientRect().left;
+    const y = canvas.height * 0.62 + (p.y * CELL - renderer!.camY) * z + canvas.getBoundingClientRect().top;
+    return { x: Math.round(x), y: Math.round(y) };
+  },
 };
