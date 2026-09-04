@@ -3,147 +3,150 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Scrap and Steel — build it, wire it, fight it</title>
-  <meta name="description" content="Physics-based robot building sandbox and 1v1 arena fighter. Assemble a robot, wire its power grid, bind its controls, then fight it online." />
-  <meta name="theme-color" content="#16120e" />
-  <meta property="og:title" content="Scrap and Steel" />
-  <meta property="og:description" content="Build it. Wire it. Bind it. Fight it. A physics robot-building sandbox and 1v1 arena fighter." />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="https://scrap.andrenijman.com/" />
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2316120e'/%3E%3Cpath d='M7 21 13 9h3l4.5 8.5L23 12h2.5l-3.4 6.7L24 23h-3l-2-4.3L15.6 23h-3l-4-8z' fill='%23d8792e'/%3E%3C/svg%3E" />
+  <title>SCRAP &amp; STEEL — robot engineering sandbox</title>
+  <meta name="description" content="A 2D robot engineering sandbox. Build machines on a grid, wire their power, program their logic, then fight them." />
+  <meta name="theme-color" content="#10141a" />
+  <meta property="og:title" content="SCRAP & STEEL" />
+  <meta property="og:description" content="Build it. Wire it. Program it. Fight it." />
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='4' fill='%2310141a'/%3E%3Cpath d='M6 22 12 10h4l4 7 2-4h3l-3 6 2 5h-4l-1.6-3.6L14 24h-4l-3-6z' fill='%23d9a441'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/src/style.css" />
 </head>
 <body>
-  <canvas id="gl"></canvas>
+  <div id="app">
 
-  <!-- BOOT / LOADING -->
-  <div id="boot">
-    <div class="boot-inner">
-      <div class="boot-logo">SCRAP <span class="amp">&amp;</span> STEEL</div>
-      <div class="boot-bar"><div id="boot-fill"></div></div>
-      <div id="boot-status" class="boot-status">Waking the foundry…</div>
-      <div id="boot-error" class="boot-error hidden"></div>
-    </div>
-  </div>
-
-  <!-- MENU -->
-  <div id="screen-menu" class="screen hidden">
-    <div class="menu-vignette"></div>
-    <div class="menu-box">
-      <h1>SCRAP <span class="amp">&amp;</span> STEEL</h1>
-      <p class="tagline">Build it. Wire it. Bind it. Fight it.</p>
-      <div class="menu-buttons">
-        <button id="btn-solo" class="big">Solo vs AI</button>
-        <button id="btn-online" class="big">Online 1v1</button>
-        <button id="btn-join" class="big secondary">Join by Code…</button>
-        <div class="menu-row">
-          <button id="btn-settings" class="small">Settings</button>
-          <button id="btn-help" class="small">How to play</button>
+    <!-- ===== MENU ===== -->
+    <div id="screen-menu" class="screen">
+      <canvas id="menu-canvas"></canvas>
+      <div class="menu-center">
+        <div class="menu-logo">
+          <span class="logo-line">SCRAP</span>
+          <span class="logo-amp">&amp;</span>
+          <span class="logo-line">STEEL</span>
         </div>
-      </div>
-      <div id="relay-status" class="relay-status">relay: checking…</div>
-      <div class="versions"><span id="ver-text"></span></div>
-    </div>
-  </div>
-
-  <!-- LOBBY -->
-  <div id="screen-lobby" class="screen hidden">
-    <div class="lobby-box">
-      <div class="lobby-head">
-        <button id="btn-leave-lobby" class="small">← Leave</button>
-        <h2>Room <span id="lobby-code" class="code">—</span></h2>
-        <button id="btn-copy-code" class="small">Copy code</button>
-      </div>
-      <div class="lobby-players">
-        <div class="player" id="lobby-p0"></div>
-        <div class="vs">VS</div>
-        <div class="player" id="lobby-p1"></div>
-      </div>
-      <div id="lobby-settings"></div>
-      <div class="lobby-actions">
-        <button id="btn-ready" class="big">Ready</button>
-        <div id="lobby-hint" class="hint"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- BUILD -->
-  <div id="screen-build" class="screen hidden">
-    <div id="build-topbar">
-      <div class="tb-left">
-        <span id="bp-name" contenteditable="true" spellcheck="false" title="Click to rename your robot">My Robot</span>
-      </div>
-      <div class="tb-center">
-        <span id="build-timer" class="timer">--:--</span>
-        <span id="build-budget" class="pill">SP 0/1000</span>
-        <span id="build-mass" class="pill">0 kg</span>
-        <span id="build-power" class="pill">0 kW peak</span>
-        <span id="build-parts" class="pill">0/120 parts</span>
-      </div>
-      <div class="tb-right">
-        <button id="btn-undo" class="small" title="Undo (Ctrl+Z)">↶</button>
-        <button id="btn-redo" class="small" title="Redo (Ctrl+Y)">↷</button>
-        <button id="btn-test" class="small accent">▶ Test</button>
-        <button id="btn-lock" class="big accent">LOCK IN</button>
-        <button id="btn-leave-build" class="small">Leave</button>
-      </div>
-    </div>
-
-    <div id="parts-bin">
-      <div id="bin-tabs"></div>
-      <div id="bin-items"></div>
-    </div>
-
-    <div id="inspector">
-      <h3 id="insp-title">Inspector</h3>
-      <div id="insp-body">Select a part…</div>
-    </div>
-
-    <div id="controls-panel">
-      <h3>Controls</h3>
-      <div id="controls-body"></div>
-      <div class="hint">W/S throttle · A/D steer · Space fire · Shift lift — remappable</div>
-    </div>
-
-    <div id="preflight" class="hidden"></div>
-    <div id="build-msg" class="hidden"></div>
-    <div id="test-banner" class="hidden">TEST BAY <span id="test-banner-sub">— build is read-only · End Test restores your build exactly</span></div>
-    <div id="countdown" class="hidden"></div>
-  </div>
-
-  <!-- COMBAT HUD -->
-  <div id="screen-combat" class="screen hidden">
-    <div id="combat-topbar">
-      <div class="robot-status" id="status-p0"></div>
-      <div class="combat-center">
-        <div id="combat-timer" class="timer big">--:--</div>
-        <div id="combat-phase" class="phase"></div>
-      </div>
-      <div class="robot-status right" id="status-p1"></div>
-    </div>
-    <div id="ko-banner" class="hidden">OUT OF ACTION</div>
-    <div id="debug-overlay" class="hidden"></div>
-    <div id="result-overlay" class="hidden">
-      <div class="result-box">
-        <div id="result-banner" class="result-banner">VICTORY</div>
-        <p id="result-reason"></p>
-        <div id="result-stats" class="result-stats"></div>
+        <div class="menu-tag">BUILD IT · WIRE IT · PROGRAM IT · FIGHT IT</div>
         <div class="menu-buttons">
-          <button id="btn-rematch" class="big">Rematch</button>
-          <button id="btn-result-menu" class="big secondary">Menu</button>
+          <button id="btn-workshop" class="btn-primary">ENTER WORKSHOP</button>
+          <button id="btn-quick" class="btn-secondary">QUICK BATTLE vs BOT</button>
+          <button id="btn-online" class="btn-secondary">ONLINE 1V1</button>
+          <button id="btn-join" class="btn-tertiary">JOIN BY CODE…</button>
+          <button id="btn-help" class="btn-tertiary">FIELD MANUAL</button>
+        </div>
+        <div id="menu-relay" class="menu-relay">relay: —</div>
+      </div>
+    </div>
+
+    <!-- ===== WORKSHOP / BATTLE ===== -->
+    <div id="screen-game" class="screen hidden">
+      <div id="topbar">
+        <div class="tb-brand">ROBOT LAB <span id="lab-ver">v1.0</span></div>
+        <div class="tb-actions">
+          <button id="btn-test" class="tbtn accent" title="Switch between BUILD and TEST (T)">▶ TEST</button>
+          <button id="btn-diag" class="tbtn" title="Diagnostic overlays (D)">◐ DIAG</button>
+          <button id="btn-save" class="tbtn" title="Save blueprint">SAVE</button>
+          <button id="btn-load" class="tbtn" title="Load blueprint">LOAD</button>
+          <button id="btn-export" class="tbtn" title="Export blueprint string">⇪</button>
+          <button id="btn-import" class="tbtn" title="Import blueprint string">⇩</button>
+          <button id="btn-menu" class="tbtn" title="Back to menu">✕</button>
+        </div>
+        <div class="tb-mass">
+          <div class="mass-label">MASS <span id="mass-num">0/1500</span> kg</div>
+          <div class="mass-bar"><div id="mass-fill"></div></div>
+        </div>
+        <div class="tb-money" id="money">$ 48,350</div>
+        <button id="btn-lock" class="btn-lock hidden">READY ▸</button>
+      </div>
+
+      <div id="main-row">
+        <div id="parts-panel">
+          <div id="bin-tabs"></div>
+          <div id="bin-items"></div>
+        </div>
+
+        <div id="viewport-wrap">
+          <canvas id="gl"></canvas>
+          <div id="toolstrip">
+            <button class="tool active" data-tool="place" title="Place (1)">PLACE</button>
+            <button class="tool" data-tool="select" title="Select (2)">SELECT</button>
+            <button class="tool" data-tool="wire" title="Wire (3)">WIRE</button>
+            <button class="tool" data-tool="delete" title="Delete (4)">REMOVE</button>
+            <span class="tool-sep"></span>
+            <button id="btn-undo" class="tool" title="Undo (Ctrl+Z)">↶</button>
+            <button id="btn-redo" class="tool" title="Redo (Ctrl+Y)">↷</button>
+            <span class="tool-sep"></span>
+            <span id="hint-bar" class="hint-bar">DRAG — PLACE · RIGHT CLICK — REMOVE · R — ROTATE · C/V — COPY/PASTE</span>
+          </div>
+          <div id="test-banner" class="hidden">TEST MODE <span id="test-sub"></span></div>
+          <div id="countdown" class="hidden"></div>
+          <div id="toast" class="hidden"></div>
+        </div>
+
+        <div id="info-panel">
+          <div class="panel">
+            <div class="panel-title">ROBOT INFO</div>
+            <div id="robot-info" class="panel-body"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-title">POWER GRID</div>
+            <div id="power-grid" class="panel-body"></div>
+            <canvas id="power-graph" height="46"></canvas>
+          </div>
+          <div class="panel">
+            <div class="panel-title">CONTROL LOGIC</div>
+            <div id="logic-summary" class="panel-body mono"></div>
+          </div>
+          <div class="panel" id="diag-panel">
+            <div class="panel-title">COMPONENT INSPECTOR</div>
+            <div id="diag-body" class="panel-body mono">Select a component in TEST mode…</div>
+          </div>
+        </div>
+      </div>
+
+      <div id="bottom-row">
+        <div id="help-card" class="panel">
+          <div class="panel-title">CONTROLS</div>
+          <div class="mono" id="help-body">DRAG — PLACE<br>RIGHT CLICK — REMOVE<br>R — ROTATE<br>C / V — COPY / PASTE<br>WIRE MODE — CLICK TWO PORTS<br>T — TEST · D — DIAGNOSTICS</div>
+        </div>
+        <div id="selected-card" class="panel">
+          <div class="panel-title" id="sel-title">COMPONENT</div>
+          <div id="sel-body" class="mono"></div>
+        </div>
+        <div id="logic-panel" class="panel">
+          <div id="logic-head">
+            <div class="panel-title">LOGIC CIRCUIT</div>
+            <div id="logic-cats"></div>
+            <button id="logic-del" class="tbtn small" title="Delete selected node">🗑</button>
+          </div>
+          <div id="logic-canvas-host"></div>
+          <div id="logic-props" class="mono hidden"></div>
+        </div>
+      </div>
+
+      <div id="lobby-bar" class="hidden">
+        <span id="lobby-info"></span>
+        <button id="btn-lobby-ready" class="btn-lock">READY ▸</button>
+        <button id="btn-lobby-leave" class="tbtn">LEAVE</button>
+      </div>
+
+      <div id="result-overlay" class="hidden">
+        <div class="result-box">
+          <div id="result-banner" class="result-banner">VICTORY</div>
+          <div id="result-reason"></div>
+          <div id="result-stats" class="result-stats"></div>
+          <div class="result-buttons">
+            <button id="btn-rematch" class="btn-primary">REMATCH</button>
+            <button id="btn-result-menu" class="btn-secondary">WORKSHOP</button>
+          </div>
         </div>
       </div>
     </div>
+
+    <!-- ===== MODAL ===== -->
+    <div id="modal" class="hidden"><div class="modal-box" id="modal-content"></div></div>
   </div>
 
-  <!-- MODALS -->
-  <div id="modal" class="hidden">
-    <div class="modal-box" id="modal-content"></div>
-  </div>
-
-  <script type="module" src="/src/app/main.ts"></script>
+  <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

@@ -1,69 +1,75 @@
-// Blueprint canonicalization tests (release gate: same blueprint => same hash).
+// Blueprint canonicalization + validation tests
 import { describe, it, expect } from "vitest";
-import { canonicalize, blueprintHash } from "../src/blueprint/canonical";
-import { emptyBlueprint, type Blueprint } from "../src/blueprint/types";
+import { emptyBlueprint, canonicalBlueprint, hashString, preflight, robotStats, computeAdjacency, type Blueprint } from "../src/game/blueprint";
+import { PARTS } from "../src/game/parts";
 
-function bpWith(parts: Blueprint["parts"], wires: Blueprint["wires"] = []): Blueprint {
+function cart(): Blueprint {
   const bp = emptyBlueprint("t");
-  bp.id = "fixed-test-id"; // stable id: it is part of the hash
-  bp.parts = parts;
-  bp.wires = wires;
+  bp.id = "fixed";
+  bp.parts = [
+    { id: "a", def: "alu_frame", x: 0, y: 0, rot: 0 },
+    { id: "b", def: "battery_pack", x: 0, y: -1, rot: 0 },
+    { id: "c", def: "micro_controller", x: -1, y: 0, rot: 0 },
+    { id: "d", def: "motor_small", x: 0, y: 2, rot: 0 },
+    { id: "e", def: "wheel_medium", x: 0, y: 3, rot: 0 },
+  ];
+  bp.wires = [{ id: "w1", a: { part: "b", port: 0 }, b: { part: "c", port: 0 } }];
+  bp.logic = [
+    { id: "n1", type: "key_forward", x: 0, y: 0, params: {}, in: {} },
+    { id: "n2", type: "motor_power", x: 2, y: 0, params: { part: "d" }, in: { val: "n1" } },
+  ];
   return bp;
 }
 
 describe("blueprint canonicalization", () => {
-  it("produces identical hashes for equivalent blueprints with different insertion order", () => {
-    const a = bpWith([
-      { id: "p2", defId: "frame_tube", pos: [1, 0, 0], rot: 0 },
-      { id: "p1", defId: "frame_tube", pos: [0, 0, 0], rot: 0 },
-    ]);
-    const b = bpWith([
-      { id: "p1", defId: "frame_tube", pos: [0, 0, 0], rot: 0 },
-      { id: "p2", defId: "frame_tube", pos: [1, 0, 0], rot: 0 },
-    ]);
-    expect(blueprintHash(a)).toBe(blueprintHash(b));
+  it("same content in different insertion order -> same canonical string", () => {
+    const a = cart();
+    const b = cart();
+    b.parts.reverse();
+    expect(canonicalBlueprint(a)).toBe(canonicalBlueprint(b));
   });
 
-  it("changes the hash when content changes", () => {
-    const a = bpWith([{ id: "p1", defId: "frame_tube", pos: [0, 0, 0], rot: 0 }]);
-    const b = bpWith([{ id: "p1", defId: "armor_steel", pos: [0, 0, 0], rot: 0 }]);
-    expect(blueprintHash(a)).not.toBe(blueprintHash(b));
+  it("different content -> different hash", () => {
+    const a = cart();
+    const b = cart();
+    b.parts[0]!.def = "steel_block";
+    expect(hashString(canonicalBlueprint(a))).not.toBe(hashString(canonicalBlueprint(b)));
   });
 
-  it("hashes wires regardless of order", () => {
-    const w1 = { id: "w1", from: "a", to: "b", gauge: "medium" as const };
-    const w2 = { id: "w2", from: "b", to: "c", gauge: "light" as const };
-    const a = bpWith(
-      [
-        { id: "a", defId: "battery_compact", pos: [0, 0, 0], rot: 0 },
-        { id: "b", defId: "motor_compact", pos: [1, 0, 0], rot: 0 },
-        { id: "c", defId: "wheel_rubber", pos: [2, 0, 0], rot: 0 },
-      ],
-      [w1, w2],
-    );
-    const b = bpWith(
-      [
-        { id: "a", defId: "battery_compact", pos: [0, 0, 0], rot: 0 },
-        { id: "b", defId: "motor_compact", pos: [1, 0, 0], rot: 0 },
-        { id: "c", defId: "wheel_rubber", pos: [2, 0, 0], rot: 0 },
-      ],
-      [w2, w1],
-    );
-    expect(blueprintHash(a)).toBe(blueprintHash(b));
+  it("hashString is deterministic", () => {
+    expect(hashString("scrap")).toBe(hashString("scrap"));
+    expect(hashString("scrap")).not.toBe(hashString("steel"));
   });
 
-  it("canonicalize() is stable under repeated application", () => {
-    const a = bpWith([
-      { id: "p2", defId: "frame_tube", pos: [1, 0, 0], rot: 2 },
-      { id: "p1", defId: "frame_tube", pos: [0, 0, 0], rot: 1 },
-    ]);
-    expect(canonicalize(canonicalize(a))).toEqual(canonicalize(a));
+  it("robotStats sums mass/cost/cpu", () => {
+    const st = robotStats(cart());
+    const alu = PARTS.find((p) => p.id === "alu_frame")!;
+    const bat = PARTS.find((p) => p.id === "battery_pack")!;
+    expect(st.mass).toBeGreaterThan(alu.mass);
+    expect(st.energyKJ).toBe(bat.source!.energyKJ);
+    expect(st.cpuProvided).toBeGreaterThanOrEqual(8);
+    expect(st.cpuUsed).toBe(2);
   });
 
-  it("does not leak runtime values into blueprints (type-level guard test)", () => {
-    // Blueprint must serialize to JSON without temperature/charge/damage keys
-    const bp = emptyBlueprint("clean");
-    const s = JSON.stringify(canonicalize(bp));
-    expect(s).not.toMatch(/temperature|charge|damage|velocity|hp/);
+  it("adjacency finds edge-touching parts only", () => {
+    const adj = computeAdjacency(cart());
+    // battery (-1 row) touches frame; motor touches frame; wheel touches motor
+    const pairs = adj.map((a) => [a.a, a.b].sort().join("|"));
+    expect(pairs).toContain("a|b");
+    expect(pairs).toContain("a|d");
+    expect(pairs).toContain("d|e");
+    expect(pairs).not.toContain("b|e");
+  });
+
+  it("preflight flags missing controller and mass overload", () => {
+    const bp = cart();
+    bp.parts = bp.parts.filter((p) => p.def !== "micro_controller");
+    const items = preflight(bp, 1500);
+    expect(items.some((i) => !i.ok && /controller/i.test(i.text))).toBe(true);
+    const heavy = cart();
+    heavy.parts = heavy.parts.filter((p) => p.def !== "alu_frame");
+    for (let i = 0; i < 20; i++) heavy.parts.push({ id: `x${i}`, def: "ballast", x: i % 10, y: Math.floor(i / 10) * 2, rot: 0 });
+    const items2 = preflight(heavy, 1500);
+    expect(items2.some((i) => !i.ok && /Mass/.test(i.text))).toBe(true);
   });
 });

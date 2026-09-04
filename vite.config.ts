@@ -8,8 +8,7 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          three: ["three"],
-          rapier: ["@dimforge/rapier3d-compat"],
+          planck: ["planck-js"],
         },
       },
     },
