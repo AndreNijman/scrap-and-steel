@@ -754,7 +754,9 @@ export class Simulation {
           side.damageDealt += dmg;
           // knockback
           const dir = Math.sign(ep.x - pos.x) || 1;
-          eb.body.applyLinearImpulse(planck.Vec2(dir * spin * eb.body.getMass() * 0.02, spin * eb.body.getMass() * 0.006), eb.body.getPosition());
+          // knockback: a shove, not a launch (0.02 launched robots into orbit
+          // on first contact, so hits never accumulated)
+          eb.body.applyLinearImpulse(planck.Vec2(dir * spin * eb.body.getMass() * 0.004, spin * eb.body.getMass() * 0.001), eb.body.getPosition(), true);
         }
       }
     }
