@@ -76,7 +76,7 @@ export interface RobotView {
   destroyed: boolean;
 }
 
-const MIN_DAMAGE_IMPULSE = 22;
+const MIN_DAMAGE_IMPULSE = 60;
 const KO_CONFIRM = 3.0;
 
 let rngState = 1;
@@ -310,7 +310,7 @@ export class Simulation {
     // robot-robot or robot-terrain impact damage
     const sideA = this.sideOfPart(userA);
     const sideB = this.sideOfPart(userB);
-    const dmg = (impulse - MIN_DAMAGE_IMPULSE) * 0.55;
+    const dmg = Math.min(120, (impulse - MIN_DAMAGE_IMPULSE) * 0.06); // capped: one ram never one-shots
     if (sideA && sideB && sideA !== sideB) {
       // robot vs robot: both take damage, scaled by armor
       this.damagePart(sideA, userA, dmg);

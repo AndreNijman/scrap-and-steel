@@ -1156,7 +1156,7 @@ function frameBody(now: number) {
         const b = sim.robots[1]!.phys.rootBody?.getPosition();
         if (a && b) {
           const sep = Math.hypot(a.x - b.x, a.y - b.y);
-          const want = Math.max(26, Math.min(56, sep * 1.3 + 18));
+          const want = Math.max(30, Math.min(44, sep * 1.1 + 22));
           renderer.zoom += (want - renderer.zoom) * Math.min(1, dt);
         }
       }
