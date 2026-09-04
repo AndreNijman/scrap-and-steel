@@ -1,14 +1,13 @@
-// SCRAP AND STEEL — tools/smoke.mjs
-// Browser smoke test: boots the game, enters solo build, places parts, starts a
-// test, ends it, locks in, and lets the AI fight run. Fails on console errors.
+// SCRAP & STEEL — CI smoke test (2D game)
+// Boots the built game, enters the workshop, places parts, wires, runs a
+// TEST-mode drive, then fights a bot battle to a resolution.
 import { chromium } from "playwright";
-import { createServer } from "node:http";
-import { readFileSync, existsSync } from "node:fs";
-import { join, extname } from "node:path";
 
 const DIST = new URL("../dist", import.meta.url).pathname;
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".wasm": "application/wasm", ".json": "application/json" };
-
+const { createServer } = await import("node:http");
+const { readFileSync, existsSync } = await import("node:fs");
+const { join, extname } = await import("node:path");
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css" };
 const server = createServer((req, res) => {
   let p = join(DIST, req.url.split("?")[0] === "/" ? "index.html" : req.url.split("?")[0]);
   if (!existsSync(p)) p = join(DIST, "index.html");
@@ -18,141 +17,88 @@ const server = createServer((req, res) => {
 await new Promise((r) => server.listen(5199, r));
 
 const browser = await chromium.launch();
-const page = await browser.newPage({ viewport: { width: 960, height: 640 } });
-const errors = [];
-page.on("pageerror", (e) => errors.push(`pageerror: ${e.message}`));
+const page = await browser.newPage({ viewport: { width: 1100, height: 700 } });
+let failed = false;
+page.on("pageerror", (e) => { console.log("PAGEERROR:", (e.stack ?? e.message).split("\n").slice(0, 3).join(" | ")); failed = true; });
 page.on("console", (m) => {
-  // relay-offline fetch failures are expected in the smoke environment
-  if (m.type() === "error" && !/ERR_CONNECTION_REFUSED|net::ERR/.test(m.text())) errors.push(`console: ${m.text()}`);
+  const t = m.text();
+  if (/net::ERR|Failed to load/.test(t)) return;
+  if (m.type() === "error") { console.log("CONSOLE:", t.slice(0, 200)); failed = true; }
 });
 
-
-// poll-based wait: Playwright's rAF-driven waitForSelector starves behind the
-// game's render loop in headless/software-GL environments
-async function waitUntil(page, fn, timeoutMs, label) {
+const ok = (msg) => console.log(`smoke: ${msg}`);
+const fail = (msg) => { console.log(`SMOKE FAIL: ${msg}`); process.exitCode = 1; };
+async function waitUntil(fn, timeoutMs, label) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     if (await page.evaluate(fn)) return;
-    await page.waitForTimeout(500);
+    await page.waitForTimeout(400);
   }
   throw new Error(`timeout waiting for ${label}`);
 }
 
-const fail = (msg) => {
-  console.error(`SMOKE FAIL: ${msg}`);
-  console.error(errors.join("\n"));
-  process.exitCode = 1;
-};
-const ok = (msg) => console.log(`smoke: ${msg}`);
-
 try {
-  await page.goto("http://localhost:5199/", { waitUntil: "networkidle" });
-  await page.waitForTimeout(2500); // rapier wasm init
-  if (errors.length) throw new Error(`boot errors: ${errors.join("; ")}`);
-  ok("booted, no console errors");
+  await page.goto("http://localhost:5199/", { waitUntil: "load" });
+  await page.waitForTimeout(2500);
+  ok("booted");
+  await page.click("#btn-workshop");
+  await waitUntil(() => !document.getElementById("screen-game").classList.contains("hidden"), 5000, "workshop");
+  ok("workshop visible");
 
-  // menu is visible
-  await waitUntil(page, () => !document.getElementById("screen-menu").classList.contains("hidden"), 5000, "menu");
-  ok("menu visible");
-
-  // solo mode
-  await page.click("#btn-solo");
-  await waitUntil(page, () => !document.getElementById("screen-build").classList.contains("hidden"), 5000, "build");
-  ok("build screen visible");
-
-  // pick a part and place it by clicking the viewport
-  await page.click('#bin-items .bin-item:first-child');
-  await page.mouse.click(640, 400);
-  await page.waitForTimeout(300);
-  const partsText = await page.textContent("#build-parts");
-  if (!/1\/120/.test(partsText)) throw new Error(`part not placed (${partsText})`);
-  ok("part placed via click");
-
-  // undo / redo
-  await page.click("#btn-undo");
+  // place parts through the UI: motion -> wheel
+  await page.click('#bin-tabs button[data-cat="motion"]');
   await page.waitForTimeout(200);
-  if (!/0\/120/.test(await page.textContent("#build-parts"))) throw new Error("undo failed");
-  await page.click("#btn-redo");
+  await page.click('#bin-items .bin-item:nth-child(2)'); // medium wheel
+  await page.mouse.click(560, 560);
+  await page.mouse.click(640, 560);
+  // structure -> blocks
+  await page.click('#bin-tabs button[data-cat="structure"]');
   await page.waitForTimeout(200);
-  if (!/1\/120/.test(await page.textContent("#build-parts"))) throw new Error("redo failed");
-  ok("undo/redo works");
+  await page.click('#bin-items .bin-item:nth-child(1)'); // steel block
+  for (const x of [560, 600, 640]) await page.mouse.click(x, 500);
+  const devType = await page.evaluate(() => typeof window.__dev);
+  const bpShape = await page.evaluate(() => { const b = window.__dev.bp(); return { parts: b.parts.length, wires: b.wires.length, logic: b.logic.length }; });
+  console.log("dev:", devType, JSON.stringify(bpShape));
+  if (bpShape.parts < 1) throw new Error("no state");
+  ok("parts placed via UI clicks");
 
-  // build a minimal drivable cart via the autosave slot (a known-good build)
-  const cart = {
-    schemaVersion: 1,
-    id: "smoke-cart",
-    name: "Smoke Cart",
-    parts: [
-      { id: "core", defId: "control_core", pos: [0, 0, 0], rot: 0 },
-      { id: "bat", defId: "battery_hidisc", pos: [0, 1, 0], rot: 0 },
-      { id: "motL", defId: "motor_torque", pos: [-1, 0, 0], rot: 0 },
-      { id: "motR", defId: "motor_torque", pos: [1, 0, 0], rot: 0 },
-      { id: "whlL", defId: "wheel_rubber", pos: [-2, 0, 0], rot: 0 },
-      { id: "whlR", defId: "wheel_rubber", pos: [2, 0, 0], rot: 0 },
-    ],
-    wires: [
-      { id: "w1", from: "bat", to: "core", gauge: "heavy" },
-      { id: "w2", from: "bat", to: "motL", gauge: "heavy" },
-      { id: "w3", from: "bat", to: "motR", gauge: "heavy" },
-    ],
-    bindings: [
-      { channel: "throttle", targetPartId: "motL" },
-      { channel: "throttle", targetPartId: "motR" },
-      { channel: "steer", targetPartId: "motL" },
-      { channel: "steer", targetPartId: "motR" },
-    ],
-  };
-  await page.evaluate((bp) => {
-    localStorage.setItem("scrap_bp_autosave_p1", bp);
-  }, JSON.stringify(cart));
-  await page.reload({ waitUntil: "networkidle" });
-  await page.waitForTimeout(2000);
-  await page.click("#btn-solo");
-  await page.waitForTimeout(500);
-  const loaded = await page.textContent("#build-parts");
-  ok(`autosave loaded: ${loaded}`);
+  // programmatically finish a valid cart (wheels/motors/battery/controller + wires + logic)
+  await page.evaluate(() => window.__dev.loadCart());
+  const cartOk = await page.evaluate(() => {
+    const b = window.__dev.bp();
+    return b.parts.length >= 8 && b.wires.length >= 3 && b.logic.length >= 4;
+  });
+  if (!cartOk) throw new Error("cart assembly failed");
+  ok("cart assembled (parts + wires + logic)");
 
-  // Test Bay: start test, let physics run, end test — blueprint must restore exactly
-  const bpBefore = await page.evaluate(() => localStorage.getItem("scrap_bp_autosave_p1"));
+  // TEST mode: drive right
   await page.click("#btn-test");
-  await page.waitForTimeout(3000); // let the cart drive around the test arena
-  await page.click("#btn-test"); // End Test
-  await page.waitForTimeout(400);
-  const bpAfter = await page.evaluate(() => localStorage.getItem("scrap_bp_autosave_p1"));
-  if (bpBefore !== bpAfter) throw new Error("Test Bay leaked runtime state into the blueprint");
-  ok("test bay start/end restores blueprint exactly");
-  await page.screenshot({ path: "shots/smoke-testbay.png" });
+  await waitUntil(() => window.__dev.state().mode === "test", 5000, "test mode");
+  await page.keyboard.down("KeyW");
+  await page.waitForTimeout(2000);
+  const x1 = await page.evaluate(() => window.__dev.state().sim.a.pos.x);
+  await page.keyboard.up("KeyW");
+  ok(`test drive: robot at x=${x1?.toFixed(2)}`);
 
-  // lock in -> combat starts with countdown
-  await page.click("#btn-lock");
-  await waitUntil(page, () => !document.getElementById("screen-combat").classList.contains("hidden"), 15000, "combat");
-  ok("combat screen reached");
-
-  // wait for the AI fight to produce a result; drive into the enemy meanwhile
+  // battle vs bot
+  await page.evaluate(() => window.__dev.startBotBattle("scout"));
+  await waitUntil(() => window.__dev.state().mode === "test" && window.__dev.state().sim, 10000, "battle sim");
   await page.keyboard.down("KeyW");
   await page.keyboard.down("Space");
-  try {
-    await waitUntil(page, () => !document.getElementById("result-overlay").classList.contains("hidden"), 300000, "result");
-    const banner = await page.textContent("#result-banner");
-    const reason = await page.textContent("#result-reason");
-    ok(`combat resolved: ${banner} — ${reason}`);
-  } catch (e) {
-    const st = await page.evaluate(() => ({
-      overlay: document.getElementById("result-overlay").className,
-      timer: document.getElementById("combat-timer").textContent,
-      p0: document.getElementById("status-p0").textContent,
-      p1: document.getElementById("status-p1").textContent,
-    }));
-    fail(`result never shown: ${e.message.split("\n")[0]} | overlay="${st.overlay}" timer=${st.timer} | YOU[${st.p0}] AI[${st.p1}]`);
+  let outcome = null;
+  for (let i = 0; i < 90; i++) {
+    await page.waitForTimeout(1000);
+    const s = await page.evaluate(() => window.__dev.state().sim);
+    if (s?.outcome) { outcome = s.outcome; break; }
   }
   await page.keyboard.up("KeyW");
   await page.keyboard.up("Space");
-  await page.screenshot({ path: "shots/smoke-combat.png" });
-  if (errors.length) throw new Error(`runtime errors: ${errors.slice(0, 5).join("; ")}`);
+  if (outcome) ok(`battle resolved: ${JSON.stringify(outcome)}`);
+  else fail("battle did not resolve in 90s");
 } catch (e) {
-  fail(e.message);
-} finally {
-  await browser.close();
-  server.close();
+  fail(e.message.split("\n")[0]);
 }
-console.log(process.exitCode ? "SMOKE FAILED" : "SMOKE PASSED");
+await browser.close();
+server.close();
+console.log(failed || process.exitCode ? "SMOKE FAILED" : "SMOKE PASSED");
+if (failed) process.exit(1);

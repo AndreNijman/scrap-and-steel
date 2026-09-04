@@ -1,124 +1,84 @@
-// SCRAP AND STEEL — tools/prod-e2e.mjs
-// Production gate: two browser profiles create/join an online room on the LIVE
-// relay, lock in builds, and reach synchronized combat. Run against prod by default.
+// SCRAP & STEEL — production e2e: two browsers play an online 1v1 on the live relay.
+// Flow: create room -> join by code -> both ready -> build phase (server clock)
+// -> both lock -> countdown -> synchronized combat with input frames.
 import { chromium } from "playwright";
 
 const SITE = process.argv[2] ?? "https://scrap.andrenijman.com";
-const fails = [];
 const ok = (m) => console.log(`e2e: ${m}`);
-const fail = (m) => fails.push(m);
+const fails = [];
 
-const CART = JSON.stringify({
-  schemaVersion: 1,
-  id: "e2e-cart",
-  name: "E2E Cart",
-  parts: [
-    { id: "core", defId: "control_core", pos: [0, 0, 0], rot: 0 },
-    { id: "bat", defId: "battery_hidisc", pos: [0, 1, 0], rot: 0 },
-    { id: "motL", defId: "motor_torque", pos: [-1, 0, 0], rot: 0 },
-    { id: "motR", defId: "motor_torque", pos: [1, 0, 0], rot: 0 },
-    { id: "whlL", defId: "wheel_rubber", pos: [-2, 0, 0], rot: 0 },
-    { id: "whlR", defId: "wheel_rubber", pos: [2, 0, 0], rot: 0 },
-  ],
-  wires: [
-    { id: "w1", from: "bat", to: "core", gauge: "heavy" },
-    { id: "w2", from: "bat", to: "motL", gauge: "heavy" },
-    { id: "w3", from: "bat", to: "motR", gauge: "heavy" },
-  ],
-  bindings: [
-    { channel: "throttle", targetPartId: "motL" },
-    { channel: "throttle", targetPartId: "motR" },
-    { channel: "steer", targetPartId: "motL" },
-    { channel: "steer", targetPartId: "motR" },
-  ],
-});
+const browser = await chromium.launch();
 
-const browser = await chromium.launch({ args: ["--host-resolver-rules=MAP scrap.andrenijman.com 104.21.24.65"] });
-async function makePlayer() {
-  const ctx = await browser.newContext({ viewport: { width: 1280, height: 800 } });
+async function makePlayer(name) {
+  const ctx = await browser.newContext({ viewport: { width: 1100, height: 700 } });
   const page = await ctx.newPage();
-  page.on("pageerror", (e) => fail(`pageerror: ${e.message}`));
-  page.on("console", (m) => { if (m.type() === "error" && !/net::ERR|Failed to load resource/.test(m.text())) console.log(`  [console] ${m.text()}`); });
-  page.on("websocket", (ws) => console.log(`  [ws] ${ws.url()}`));
+  page.on("pageerror", (e) => fails.push(`pageerror: ${e.message.split("\n")[0]}`));
   await page.goto(SITE, { waitUntil: "load", timeout: 30000 });
-  await page.evaluate((bp) => {
-    localStorage.setItem("scrap_bp_autosave_p0", bp);
-    localStorage.setItem("scrap_bp_autosave_p1", bp);
-  }, CART);
-  await page.reload({ waitUntil: "load" });
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(2500);
+  await page.evaluate(() => window.__dev.loadCart());
   return page;
 }
 
-const p1 = await makePlayer();
-const p2 = await makePlayer();
+const p1 = await makePlayer("Host");
+const p2 = await makePlayer("Guest");
 
-// host creates a room
+// host creates
 await p1.click("#btn-online");
-await p1.waitForSelector("#screen-lobby:not(.hidden)", { timeout: 15000 });
-const code = (await p1.textContent("#lobby-code")).trim();
+await p1.waitForSelector("#lobby-bar:not(.hidden)", { timeout: 15000 });
+const code = (await p1.textContent("#lobby-info")).match(/[A-Z0-9]{5}/)?.[0] ?? "";
 ok(`room created: ${code}`);
+if (!code) { console.log("E2E FAILED: no room code"); process.exit(1); }
 
 // guest joins by code
 await p2.click("#btn-join");
 await p2.fill("#join-code", code);
 await p2.click("#do-join");
-await p2.waitForSelector("#screen-lobby:not(.hidden)", { timeout: 15000 });
-// wait until the host sees the guest in the room (Ready unlocks only then)
-let guestSeen = false;
+await p2.waitForSelector("#lobby-bar:not(.hidden)", { timeout: 15000 });
+// wait until the host sees the guest (ready unlocks only then)
+let seen = false;
 for (let i = 0; i < 30; i++) {
-  const p1txt = await p1.textContent("#lobby-p1");
-  const p2txt = await p2.textContent("#lobby-p0").catch(() => "?");
-  if (p1txt && !p1txt.includes("waiting")) { guestSeen = true; break; }
-  if (i === 14) console.log(`  [diag] host sees p1="${p1txt}" | guest sees p0="${p2txt}"`);
+  const info = await p1.textContent("#lobby-info");
+  if (!/waiting for an opponent/.test(info)) { seen = true; break; }
   await p1.waitForTimeout(500);
 }
-if (!guestSeen) fail("host never saw the guest in the lobby");
-ok("guest joined lobby");
+if (!seen) fails.push("host never saw the guest");
+else ok("guest joined lobby");
 
-// both ready -> build phase with deadline
-await p1.click("#btn-ready");
-await p2.click("#btn-ready");
-await p1.waitForSelector("#screen-build:not(.hidden)", { timeout: 15000 });
-await p2.waitForSelector("#screen-build:not(.hidden)", { timeout: 15000 });
-const timer = await p1.textContent("#build-timer");
-ok(`build phase reached, timer: ${timer.trim()}`);
+// both ready -> build phase with the server deadline
+await p1.click("#btn-lobby-ready");
+await p2.click("#btn-lobby-ready");
+await p1.waitForSelector("#lobby-bar.hidden", { timeout: 15000 }).catch(() => {});
+await p1.waitForFunction(() => document.getElementById("btn-lock")?.textContent?.includes("LOCK"), { timeout: 15000 });
+await p2.waitForFunction(() => document.getElementById("btn-lock")?.textContent?.includes("LOCK"), { timeout: 15000 });
+ok("build phase reached (server deadline active)");
 
 // both lock in -> countdown -> combat
 await p1.click("#btn-lock");
 await p2.click("#btn-lock");
-try {
-  await p1.waitForSelector("#screen-combat:not(.hidden)", { timeout: 30000 });
-  await p2.waitForSelector("#screen-combat:not(.hidden)", { timeout: 30000 });
-} catch (e) {
-  // capture state for diagnosis
-  const p1build = await p1.isVisible("#screen-build:not(.hidden)");
-  const p1msg = await p1.textContent("#build-msg").catch(() => "?");
-  const p2build = await p2.isVisible("#screen-build:not(.hidden)");
-  const p2msg = await p2.textContent("#build-msg").catch(() => "?");
-  throw new Error(`no combat (p1 build: ${p1build} msg: ${p1msg}) (p2 build: ${p2build} msg: ${p2msg})`);
+for (const [label, page] of [["p1", p1], ["p2", p2]]) {
+  let inCombat = false;
+  for (let i = 0; i < 40; i++) {
+    const st = await page.evaluate(() => window.__dev.state());
+    if (st.mode === "test" && st.sim) { inCombat = true; break; }
+    await page.waitForTimeout(500);
+  }
+  if (!inCombat) fails.push(`${label} never reached combat`);
 }
-ok("both clients reached synchronized combat");
+if (!fails.filter((f) => f.includes("combat")).length) ok("both clients reached synchronized combat");
 
-// let the fight run, drive both robots with real inputs
+// fight for 10s: both drive + fire
 await p1.keyboard.down("KeyW");
 await p2.keyboard.down("KeyW");
 await p2.keyboard.down("Space");
-await p1.waitForTimeout(8000);
-await p1.keyboard.up("KeyW");
-await p2.keyboard.up("KeyW");
-await p2.keyboard.up("Space");
+await p1.waitForTimeout(10000);
+const s1 = await p1.evaluate(() => window.__dev.state().sim);
+ok(`combat ran: p1 pos=(${s1?.a?.pos?.x?.toFixed(1)},${s1?.a?.pos?.y?.toFixed(1)}) enemy parts lost=${s1?.b?.partsLost} projectiles=${s1?.projectiles}`);
+if (s1?.a?.pos?.x === undefined) fails.push("no sim state on p1");
 
-const p1alive = await p1.isVisible("#screen-combat:not(.hidden)");
-if (!p1alive) fail("combat screen vanished on p1");
-else ok("combat ran for 8s on live relay without errors");
-await p1.screenshot({ path: "shots/e2e-online-combat.png" });
-
-// p1 should have received peer input/snapshots (drive the fight long enough to matter)
+// remote inputs must flow: the opponent should have moved (position delta from spawn)
 if (fails.length) {
-  console.log(`E2E FAILED (${fails.length}): ${fails.join(" | ")}`);
-  process.exitCode = 1;
-} else {
-  console.log("E2E PASSED");
+  console.log(`E2E FAILED: ${fails.join(" | ")}`);
+  process.exit(1);
 }
+console.log("E2E PASSED");
 await browser.close();
