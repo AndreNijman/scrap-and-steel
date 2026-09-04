@@ -81,7 +81,7 @@ try {
   ok(`test drive: robot at x=${x1?.toFixed(2)}`);
 
   // battle vs bot
-  await page.evaluate(() => window.__dev.startBotBattle("artillery"));
+  await page.evaluate(() => window.__dev.startBotBattle("berserker"));
   await waitUntil(() => window.__dev.state().mode === "test" && window.__dev.state().sim, 10000, "battle sim");
   await page.keyboard.down("KeyW");
   await page.keyboard.down("Space");
