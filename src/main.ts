@@ -466,7 +466,7 @@ function onCanvasDown(e: PointerEvent) {
   if (e.button === 2) {
     // right click: remove
     const p = partAtCell(c.x, c.y);
-    if (p) { selectedPartId = p.id; builder.deleteSelected(); }
+    if (p) { selectedPartId = p.id; builder.selected = p.id; builder.deleteSelected(); }
     return;
   }
   if (builder.tool === "place" && builder.placeDefId) {
@@ -479,7 +479,7 @@ function onCanvasDown(e: PointerEvent) {
     }
   } else if (builder.tool === "delete") {
     const p = partAtCell(c.x, c.y);
-    if (p) { selectedPartId = p.id; builder.deleteSelected(); }
+    if (p) { selectedPartId = p.id; builder.selected = p.id; builder.deleteSelected(); }
   } else {
     // select / drag
     const p = partAtCell(c.x, c.y);
