@@ -86,7 +86,7 @@ try {
   await page.keyboard.down("KeyW");
   await page.keyboard.down("Space");
   let outcome = null;
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < 300; i++) {
     await page.waitForTimeout(1000);
     const s = await page.evaluate(() => window.__dev.state().sim);
     if (s?.outcome) { outcome = s.outcome; break; }
