@@ -5,8 +5,7 @@
 // same logic circuits.
 
 import planck from "planck-js";
-import type { Blueprint } from "./blueprint";
-import { partRect } from "./blueprint";
+import { computeAdjacency, type Blueprint } from "./blueprint";
 import { part, PART_EXTRA, CELL } from "./parts";
 import { buildRobotWorld, makeProjectile, destroyPartBody, type RobotPhysics } from "./physics";
 import { buildArenaWorld, type ArenaDef } from "./arena";
@@ -43,6 +42,7 @@ export interface RobotSide {
   lastResult: { mobility: boolean; offense: boolean; control: boolean };
   capBufferKJ: number;
   railCharge: number;
+  adjacency: Map<string, string[]> | null;
 }
 
 export type MatchOutcome = { kind: "ko"; winner: number | null; reason: string } | { kind: "timeout"; winner: null; reason: "time-limit" } | null;
@@ -120,7 +120,7 @@ export class Simulation {
         partsLost: 0, damageDealt: 0,
         heat: new Map(), ammo: new Map(), weaponCooldown: new Map(), motorTemps: new Map(),
         lastResult: { mobility: false, offense: false, control: false },
-        capBufferKJ: 0, railCharge: 0,
+        capBufferKJ: 0, railCharge: 0, adjacency: null,
       };
       for (const p of bp.parts) {
         this.partToRobot.set(p.id, idx);
@@ -363,6 +363,40 @@ export class Simulation {
     }
   }
 
+  private aliveSet(rt: RobotSide): Set<string> {
+    const s = new Set<string>();
+    for (const [id, pb] of rt.phys.bodies) if (!pb.destroyed) s.add(id);
+    return s;
+  }
+
+  /** Is part `a` still weld-connected to part `b` through surviving parts?
+   *  (2D welds are unbreakable — connections persist while both end parts live.) */
+  weldConnected(rt: RobotSide, a: string, b: string): boolean {
+    if (a === b) return true;
+    const adj = rt.adjacency ?? (rt.adjacency = new Map<string, string[]>(
+      computeAdjacency(rt.bp).flatMap((w) => [[w.a, w.b] as const, [w.b, w.a] as const])
+        .reduce((m, [from, to]) => {
+          const list = m.get(from) ?? [];
+          list.push(to);
+          m.set(from, list);
+          return m;
+        }, new Map<string, string[]>()),
+    ));
+    const alive = this.aliveSet(rt);
+    if (!alive.has(a) || !alive.has(b)) return false;
+    const seen = new Set<string>([a]);
+    const q: string[] = [a];
+    while (q.length) {
+      const cur = q.shift()!;
+      for (const n of adj.get(cur) ?? []) {
+        if (!alive.has(n)) continue;
+        if (n === b) return true;
+        if (!seen.has(n)) { seen.add(n); q.push(n); }
+      }
+    }
+    return false;
+  }
+
   // ---------------- main tick ----------------
 
   step(dt: number, botA?: BotDriver, botB?: BotDriver) {
@@ -479,6 +513,7 @@ export class Simulation {
         for (const wheel of side.phys.wheels) {
           if (wheel.motorPartId !== p.id) continue;
           const j = wheel.joint;
+          if (!this.weldConnected(side, wheel.partId, wheel.motorPartId)) { j.enableMotor(false); continue; }
           if (this.logicCtx.brake === 1 && cmd === 0) {
             j.setMotorSpeed(0);
             j.setMaxMotorTorque(d.motor.torque * 2);
@@ -739,11 +774,12 @@ export class Simulation {
       // control: any living controller part
       const control = side.bp.parts.some((p) => alive.has(p.id) && (part(p.def).cpu ?? 0) >= 8);
 
-      // mobility: a living drive motor + wheel pair, or a living track unit (self-motorised)
+      // mobility: a living wheel still weld-connected to its living drive motor,
+      // or a living track unit (self-motorised)
       let mobility = false;
       for (const w of side.phys.wheels) {
-        if (!alive.has(w.partId) || !w.motorPartId) continue;
-        if (alive.has(w.motorPartId) && alive.has(w.partId)) { mobility = true; break; }
+        if (!alive.has(w.partId) || !w.motorPartId || !alive.has(w.motorPartId)) continue;
+        if (this.weldConnected(side, w.partId, w.motorPartId)) { mobility = true; break; }
       }
       if (!mobility) {
         mobility = side.phys.tracks.some((t) => alive.has(t.partId));
@@ -756,7 +792,7 @@ export class Simulation {
         const d = part(p.def);
         if (d.weapon && d.weapon.kind !== "spinner" && !PART_EXTRA[p.def]?.barrel && !PART_EXTRA[p.def]?.ammo) { offense = true; break; }
         if (d.weapon?.kind === "spinner") {
-          const motorAlive = side.bp.parts.some((q) => alive.has(q.id) && part(q.def).motor && this.adjacentAlive(side, q.id, p.id, alive));
+          const motorAlive = side.bp.parts.some((q) => alive.has(q.id) && part(q.def).motor && this.weldConnected(side, q.id, p.id));
           if (motorAlive) { offense = true; break; }
         }
       }
@@ -781,19 +817,6 @@ export class Simulation {
     }
   }
 
-  private adjacentAlive(side: RobotSide, aId: string, bId: string, alive: Set<string>): boolean {
-    // direct adjacency check between two parts
-    const pa = side.bp.parts.find((p) => p.id === aId);
-    const pb = side.bp.parts.find((p) => p.id === bId);
-    if (!pa || !pb) return false;
-    const ra = partRect(pa);
-    const rb = partRect(pb);
-    const overlapX = Math.min(ra.x + ra.w, rb.x + rb.w) - Math.max(ra.x, rb.x);
-    const overlapY = Math.min(ra.y + ra.h, rb.y + rb.h) - Math.max(ra.y, rb.y);
-    const touchX = Math.abs(ra.x + ra.w - rb.x) < 0.01 || Math.abs(rb.x + rb.w - ra.x) < 0.01;
-    const touchY = Math.abs(ra.y + ra.h - rb.y) < 0.01 || Math.abs(rb.y + rb.h - ra.y) < 0.01;
-    return alive.has(bId) && ((touchX && overlapY >= 0.5) || (touchY && overlapX >= 0.5));
-  }
 }
 
 function hasWeaponParts(side: RobotSide): boolean {

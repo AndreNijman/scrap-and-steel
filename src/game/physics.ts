@@ -161,50 +161,34 @@ export function buildRobotWorld(world: planck.World, bp: Blueprint, opts: { ox: 
     phys.wheels.push({ partId: p.id, joint, radius: d.wheel.radius, grip: d.wheel.grip, powered: !!d.wheel.powered, motorPartId: null });
   }
 
-  // drive motors: a motor part drives connected wheel joints (adjacency = shaft)
-  // and/or track units (adjacency = shaft)
-  for (const { p } of rects) {
-    const d = part(p.def);
-    if (!d.motor) continue;
-    const M = phys.bodies.get(p.id)!;
+  // drive coupling: each wheel is assigned the NEAREST motor through the weld
+  // graph (the chassis is the drivetrain). No motor = the wheel rolls free.
+  // Destroying the motor or cutting its welds deassigns the wheel at runtime.
+  {
+    const weldAdj = new Map<string, string[]>();
     for (const a of adj) {
-      const otherId = a.a === p.id ? a.b : a.b === p.id ? a.a : null;
-      if (!otherId) continue;
-      const od = part(partById.get(otherId)!.def);
-      if (od.wheel) {
-        const wheel = phys.wheels.find((w) => w.partId === otherId);
-        if (wheel && !wheel.motorPartId) {
-          wheel.motorPartId = p.id;
-          wheel.joint.enableMotor(true);
+      if (!weldAdj.has(a.a)) weldAdj.set(a.a, []);
+      if (!weldAdj.has(a.b)) weldAdj.set(a.b, []);
+      weldAdj.get(a.a)!.push(a.b);
+      weldAdj.get(a.b)!.push(a.a);
+    }
+    for (const w of phys.wheels) {
+      // BFS from the wheel to the nearest motor part
+      const seen = new Set<string>([w.partId]);
+      const q: string[] = [w.partId];
+      let motorId: string | null = null;
+      while (q.length && !motorId) {
+        const cur = q.shift()!;
+        for (const n of weldAdj.get(cur) ?? []) {
+          if (seen.has(n)) continue;
+          seen.add(n);
+          const nd = part(partById.get(n)!.def);
+          if (nd.motor) { motorId = n; break; }
+          q.push(n);
         }
       }
-      if (od.track) {
-        const track = phys.tracks.find((t) => t.partId === otherId);
-        if (track && !track.motorPartId) track.motorPartId = p.id;
-      }
-    }
-    phys.motors.set(p.id, { joint: phys.wheels.find((w) => w.motorPartId === p.id)?.joint ?? (M.joints[0] as planck.RevoluteJoint), kind: "drive" });
-  }
-
-  // track units register after motors so adjacency wiring above finds them
-  for (const { p } of rects) {
-    const d = part(p.def);
-    if (!d.track) continue;
-    const T = phys.bodies.get(p.id)!;
-    phys.tracks.push({ partId: p.id, motorPartId: null, grip: d.track.grip, body: T.body });
-  }
-  // second pass: link motors to tracks (motors were processed before tracks existed)
-  for (const { p } of rects) {
-    const d = part(p.def);
-    if (!d.motor) continue;
-    for (const a of adj) {
-      const otherId = a.a === p.id ? a.b : a.b === p.id ? a.a : null;
-      if (!otherId) continue;
-      const od = part(partById.get(otherId)!.def);
-      if (od.track) {
-        const track = phys.tracks.find((t) => t.partId === otherId);
-        if (track && !track.motorPartId) track.motorPartId = p.id;
-      }
+      w.motorPartId = motorId;
+      if (motorId) w.joint.enableMotor(true);
     }
   }
 

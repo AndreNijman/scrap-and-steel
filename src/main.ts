@@ -1137,7 +1137,7 @@ function frameBody(now: number) {
               ? "TIME LIMIT — DRAW"
               : outcome.winner === null
                 ? "MUTUAL DESTRUCTION"
-                : `robot ${outcome.winner === 0 ? "1 (YOU)" : "2 (ENEMY)"} DISABLED`;
+                : `robot ${(1 - (outcome.winner ?? 0)) === 0 ? "1 (YOU)" : "2 (ENEMY)"} DISABLED`;
           showResult(playerWon, reason);
           if (battleKind === "online") relay?.send("checksum", { tick: sim.tick, hash: sim.checksumNet?.() ?? "0" });
           break;
