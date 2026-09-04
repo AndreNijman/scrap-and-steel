@@ -88,7 +88,7 @@ export const PARTS: PartDef[] = [
   { id: "hinge_block", name: "Hinge", cat: "structure", desc: "Free-swinging pivot. Attach a part to its right.", w: 1, h: 1, mass: 20, hp: 150, cost: 60, shape: "box", armor: 1.0, ports: [], hinge: true },
   { id: "shock_mount", name: "Shock Absorber", cat: "structure", desc: "Dampens impacts on attached parts.", w: 1, h: 1, mass: 16, hp: 120, cost: 40, shape: "box", armor: 1.0, ports: [] },
   { id: "ballast", name: "Ballast Weight", cat: "structure", desc: "Dense dead weight. Tune your centre of mass.", w: 1, h: 1, mass: 160, hp: 240, cost: 30, shape: "box", armor: 0.95, ports: [] },
-  { id: "turret_bearing", name: "Turret Bearing", cat: "structure", desc: "Rotating mount. Parts to its right spin freely (drive with a servo).", w: 1, h: 2, mass: 45, hp: 220, cost: 130, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], turret: true },
+  { id: "turret_bearing", name: "Turret Bearing", cat: "structure", desc: "Rotating mount. Parts bolted above spin freely. Drive it with a servo.", w: 1, h: 2, mass: 45, hp: 220, cost: 130, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], turret: true },
   { id: "scrap_chunk", name: "Scrap Chunk", cat: "structure", desc: "Junk with personality.", w: 1, h: 1, mass: 30, hp: 100, cost: 5, shape: "box", armor: 1.15, ports: [] },
 
   // ================= ARMOUR =================

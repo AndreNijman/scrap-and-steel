@@ -1,0 +1,41 @@
+# --- deliberate keeps (why each stays) ---
+# AGENTS.md / TESTING.md hard rules: "never" states a precise prohibition
+Never give bots stats
+The Room DO never runs physics
+Never read, print, commit
+They never auto-connect
+unwired motor never moves
+never disables a robot
+never disables hardware-intact robots
+# Engineering facts: uniform properties, not vague emphasis
+Every part is its own rigid body
+# Brand tagline: four-beat imperative, intentional
+Build it. Wire it. Program it. Fight it.
+# Tutorial copy: short instructional UI fragments, panel labels, Array.every
+src/game/tutorial.ts
+# Reference docs: code blocks, tables, directory listings have no prose rhythm
+3 sentences same length
+three-item list
+# misc structural lines
+Every gameplay key feeds the logic system
+# tutorial.ts: step titles are UI labels; rhythm across them is list-like
+ADD BATTERY AND CONTROLLER
+ELECTRICAL has batteries
+playerMoved: boolean
+testUsed: boolean
+hint:
+.every(
+CONTROL has the microcontroller
+- **physics.test.ts**: deterministic fixtures: wired cart accelerates via
+- Grid construction with snap, rotate, copy and paste, multi-select, undo,
+Unchanged relay contract: `?create=1` / `?code=`, settings, absolute build
+blueprint.ts grid build data, canonicalization, adjacency, preflight
+draw.ts canvas world renderer, particles, camera
+drivetrain, empty-battery, NaN gate).
+latches, PID loops, and outputs bound to the exact motor, servo or weapon
+logic → blueprint → parts`.
+logic.ts node graph: inputs, sensors, math/flow, outputs, evaluator
+node tools/mp-smoke.mjs # relay protocol smoke against wrangler dev
+npm run check # typecheck + all tests (minimum gate)
+npm run dev # localhost:5180
+| Undo / redo | CTRL+Z / CTRL+Y |
