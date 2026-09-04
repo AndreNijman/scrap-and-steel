@@ -104,6 +104,27 @@ describe("2D physics fixtures", () => {
     expect(x1 - x0).toBeGreaterThan(1.5);
   });
 
+  it("a flat bed of steel blocks stays rigid (no worm crawl)", { timeout: 60000 }, () => {
+    const bp = emptyBlueprint("bed");
+    for (let i = 0; i < 10; i++) bp.parts.push({ id: `b${i}`, def: "steel_block", x: i, y: 0, rot: 0 });
+    const sim = new Simulation({ bpA: bp, bpB: null, arena: ARENAS.range!, seed: 4 });
+    for (let i = 0; i < 300; i++) sim.step(1 / 60);
+    const ys: number[] = [];
+    const xs: number[] = [];
+    for (let i = 0; i < 10; i++) {
+      const p = sim.robots[0]!.phys.bodies.get(`b${i}`)!.body.getPosition();
+      ys.push(p.y);
+      xs.push(p.x);
+    }
+    const sag = Math.max(...ys) - Math.min(...ys);
+    const stretch = xs[9]! - xs[0]!;
+    for (let i = 0; i < 600; i++) sim.step(1 / 60);
+    const stretch2 = sim.robots[0]!.phys.bodies.get("b9")!.body.getPosition().x - sim.robots[0]!.phys.bodies.get("b0")!.body.getPosition().x;
+    expect(sag).toBeLessThan(0.02);
+    expect(stretch).toBeGreaterThan(4);
+    expect(Math.abs(stretch2 - stretch)).toBeLessThan(0.3);
+  });
+
   it("runs 600 ticks without NaN in any body transform", { timeout: 60000 }, () => {
     const sim = new Simulation({ bpA: cartBp(), bpB: cartBp(), arena: ARENAS.range!, seed: 11 });
     sim.robots[0]!.input = { forward: 1, back: 0, fire: 1, aux: 0, turret: 0 };

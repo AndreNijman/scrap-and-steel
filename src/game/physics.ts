@@ -166,7 +166,7 @@ export function buildRobotWorld(world: planck.World, bp: Blueprint, opts: { ox: 
     const ma = A.body.getWorldPoint(planck.Vec2(0, 0));
     void ma;
     const anchor = planck.Vec2((A.body.getPosition().x + B.body.getPosition().x) / 2, (A.body.getPosition().y + B.body.getPosition().y) / 2);
-    const joint = world.createJoint(planck.WeldJoint({ frequencyHz: 4, dampingRatio: 0.7 }, A.body, B.body, anchor))!;
+    const joint = world.createJoint(planck.WeldJoint({ frequencyHz: 0, dampingRatio: 1 }, A.body, B.body, anchor))!; // 0 Hz = fully rigid weld
     A.joints.push(joint);
     B.joints.push(joint);
   }
