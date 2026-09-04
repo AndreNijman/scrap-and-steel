@@ -178,3 +178,21 @@ button:hover { border-color: var(--accent); }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--edge2); }
 ::-webkit-scrollbar-track { background: var(--panel); }
+
+/* tutorial */
+#tutorial {
+  position: absolute; top: 44px; left: 10px; width: 290px;
+  background: color-mix(in srgb, var(--panel) 94%, transparent);
+  border: 1px solid var(--accent); padding: 10px 12px; z-index: 5;
+}
+.tut-head { display: flex; justify-content: space-between; align-items: center; }
+.tut-title { font-family: var(--display); font-size: 10px; letter-spacing: 0.2em; color: var(--accent); }
+.tut-skip { font-size: 9px; padding: 2px 6px; color: var(--dim); background: none; border: 1px solid var(--edge); }
+.tut-step-title { font-family: var(--display); font-size: 15px; font-weight: 600; margin: 7px 0 5px; color: var(--text); }
+.tut-body { font-size: 11px; line-height: 1.55; color: var(--text); }
+.tut-hint { margin-top: 6px; font-size: 10px; color: var(--accent2); }
+.tut-dots { display: flex; gap: 4px; margin-top: 9px; }
+.tut-dots span { width: 14px; height: 3px; background: var(--edge); }
+.tut-dots span.done { background: var(--good); }
+.tut-dots span.cur { background: var(--accent); }
+.tut-dots span.opt { opacity: 0.4; }

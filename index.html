@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>SCRAP &amp; STEEL — robot engineering sandbox</title>
+  <title>SCRAP &amp; STEEL: build it, wire it, program it, fight it</title>
   <meta name="description" content="A 2D robot engineering sandbox. Build machines on a grid, wire their power, program their logic, then fight them." />
   <meta name="theme-color" content="#10141a" />
   <meta property="og:title" content="SCRAP & STEEL" />
@@ -34,7 +34,7 @@
           <button id="btn-join" class="btn-tertiary">JOIN BY CODE…</button>
           <button id="btn-help" class="btn-tertiary">FIELD MANUAL</button>
         </div>
-        <div id="menu-relay" class="menu-relay">relay: —</div>
+        <div id="menu-relay" class="menu-relay">relay: connecting…</div>
       </div>
     </div>
 
@@ -75,9 +75,20 @@
             <button id="btn-undo" class="tool" title="Undo (Ctrl+Z)">↶</button>
             <button id="btn-redo" class="tool" title="Redo (Ctrl+Y)">↷</button>
             <span class="tool-sep"></span>
-            <span id="hint-bar" class="hint-bar">DRAG — PLACE · RIGHT CLICK — REMOVE · R — ROTATE · C/V — COPY/PASTE</span>
+            <button id="btn-tutorial" class="tool" title="Tutorial">? TUTORIAL</button>
+            <span id="hint-bar" class="hint-bar">DRAG: PLACE · W DRIVES RIGHT · RIGHT CLICK: REMOVE · R: ROTATE</span>
           </div>
           <div id="test-banner" class="hidden">TEST MODE <span id="test-sub"></span></div>
+          <div id="tutorial" class="hidden">
+            <div class="tut-head">
+              <span class="tut-title">TUTORIAL <span id="tut-step-num">1/10</span></span>
+              <button id="tut-skip" class="tut-skip">SKIP</button>
+            </div>
+            <div id="tut-title" class="tut-step-title"></div>
+            <div id="tut-body" class="tut-body"></div>
+            <div id="tut-hint" class="tut-hint"></div>
+            <div id="tut-dots" class="tut-dots"></div>
+          </div>
           <div id="countdown" class="hidden"></div>
           <div id="toast" class="hidden"></div>
         </div>
@@ -106,7 +117,7 @@
       <div id="bottom-row">
         <div id="help-card" class="panel">
           <div class="panel-title">CONTROLS</div>
-          <div class="mono" id="help-body">DRAG — PLACE<br>RIGHT CLICK — REMOVE<br>R — ROTATE<br>C / V — COPY / PASTE<br>WIRE MODE — CLICK TWO PORTS<br>T — TEST · D — DIAGNOSTICS</div>
+          <div class="mono" id="help-body">DRAG: PLACE<br>RIGHT CLICK: REMOVE<br>R: ROTATE<br>C / V: COPY / PASTE<br>WIRE MODE: CLICK TWO PORTS<br>T: TEST · D: DIAGNOSTICS</div>
         </div>
         <div id="selected-card" class="panel">
           <div class="panel-title" id="sel-title">COMPONENT</div>

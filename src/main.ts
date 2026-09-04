@@ -12,6 +12,7 @@ import { RelayClient, packInputs, unpackInputs, resolveRelayUrl } from "./game/n
 import { WorldRenderer } from "./render/draw";
 import { LogicEditor, targetOptions, NODE_DEFS } from "./ui/logicEditor";
 import { initAudio, sfx, updateDriveSound, updateWeaponSound, stopLoops } from "./audio/sfx";
+import { TUTORIAL_STEPS, loadTutorialState, persistDismissed, checkStep, type TutorialState, type TutorialCheckArgs } from "./game/tutorial";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -50,8 +51,10 @@ let acc = 0;
 let resultShown = false;
 let remoteInputs = [{ forward: 0, back: 0, fire: 0, aux: 0, turret: 0 }, { forward: 0, back: 0, fire: 0, aux: 0, turret: 0 }];
 let powerHistory: number[] = [];
+let tutorial: TutorialState = loadTutorialState();
 let cameraFollow = true;
 let toastTimer = 0;
+let tutorialTimer = 0;
 
 // =========================================================================
 // boot
@@ -106,11 +109,11 @@ function checkRelay() {
   const el = $("menu-relay");
   fetch(`${resolveRelayUrl().replace(/^ws/, "http")}/health`, { signal: AbortSignal.timeout(4000) })
     .then((r) => {
-      el.textContent = r.ok ? "RELAY ONLINE — matchmaking ready" : "RELAY ERROR";
+      el.textContent = r.ok ? "RELAY ONLINE: matchmaking ready" : "RELAY ERROR";
       el.classList.add("ok");
     })
     .catch(() => {
-      el.textContent = "RELAY OFFLINE — solo play still works";
+      el.textContent = "RELAY OFFLINE: solo play still works";
     });
 }
 
@@ -208,11 +211,13 @@ function enterWorkshop() {
   $("btn-lock").classList.add("hidden");
   $("lobby-bar").classList.add("hidden");
   refreshPanels();
+  if (tutorial.active && !tutorial.done) renderTutorial();
 }
 
 function setMode(m: Mode) {
   if (m === mode) return;
   if (m === "test") {
+    tutorial.testUsed = true;
     // immutable snapshot
     testSnapshot = JSON.stringify(bp);
     const valid = preflight(bp, maxMassFor());
@@ -237,7 +242,7 @@ function setMode(m: Mode) {
   $("btn-test").textContent = m === "build" ? "▶ TEST" : "■ BUILD";
   $("btn-test").classList.toggle("active", m === "test");
   $("test-banner").classList.toggle("hidden", m !== "test");
-  $("test-sub").textContent = battleKind === "online" ? "— the build clock is running" : battleKind === "bot" ? "— live fire" : "— physics sandbox · build clock paused";
+  $("test-sub").textContent = battleKind === "online" ? ": the build clock is running" : battleKind === "bot" ? ": live fire" : ": physics sandbox, build clock paused";
   refreshPanels();
 }
 
@@ -277,7 +282,7 @@ function startBotBattle() {
   $("btn-lock").classList.remove("hidden");
   $("btn-lock").textContent = "FIGHT ▸";
   $("lobby-bar").classList.remove("hidden");
-  $("lobby-info").innerHTML = `SCRAMBLE vs <b>${botSpec.name}</b> — ${botSpec.desc} Build your machine, then FIGHT.`;
+  $("lobby-info").innerHTML = `SCRAMBLE vs <b>${botSpec.name}</b>: ${botSpec.desc} Build your machine, then FIGHT.`;
   setModeBuild();
   toast(`Opponent: ${botSpec.name}`);
 }
@@ -304,11 +309,13 @@ function bindGameUi() {
       for (const b of document.querySelectorAll("#toolstrip .tool")) b.classList.toggle("active", b === btn);
     };
   }
+  $("btn-tutorial").onclick = () => { sfx.uiClick(); toggleTutorial(); renderTutorial(); };
+  $("tut-skip").onclick = () => { skipTutorial(); $("btn-tutorial").classList.remove("active"); };
   $("btn-undo").onclick = () => builder.undo();
   $("btn-redo").onclick = () => builder.redo();
   $("btn-test").onclick = () => {
     sfx.uiClick();
-    if (battleKind === "online") { toast("Use READY — the match clock is server-side"); return; }
+    if (battleKind === "online") { toast("Use READY: the match clock is server-side"); return; }
     if (mode === "build") {
       if (battleKind === "bot") { startMatchVsBot(); return; }
       setMode("test");
@@ -602,7 +609,7 @@ function startMatchVsBot() {
   $("btn-test").textContent = "■ BUILD";
   $("btn-test").classList.add("active");
   $("test-banner").classList.remove("hidden");
-  $("test-sub").textContent = "— live fire";
+  $("test-sub").textContent = ": live fire";
   renderer.camX = sim.arena.width / 2;
   cameraFollow = true;
   combatDeadline = Date.now() + lobbySettings.combatLimitSec * 1000;
@@ -665,7 +672,7 @@ function handleRelay(t: string, payload: unknown) {
       setModeBuild();
       $("lobby-bar").classList.remove("hidden");
       $("btn-lock").classList.add("hidden");
-      $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b> — share the code · build, then READY`;
+      $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: share the code, then READY`;
       refreshPanels();
       toast(`Connected as player ${mySlot + 1}`);
       break;
@@ -676,7 +683,7 @@ function handleRelay(t: string, payload: unknown) {
       const players = st.players ?? [];
       const both = players.length === 2 && players[0] && players[1];
       ($("btn-lobby-ready") as HTMLButtonElement).disabled = !both;
-      $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b> — ${both ? (players[mySlot]?.ready ? "waiting for opponent…" : "ready — waiting for opponent…") : "waiting for an opponent…"}`;
+      $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: ${both ? (players[mySlot]?.ready ? "waiting for opponent…" : "ready. waiting for opponent…") : "waiting for an opponent…"}`;
       break;
     }
     case "build_start": {
@@ -685,7 +692,7 @@ function handleRelay(t: string, payload: unknown) {
       $("btn-lock").classList.remove("hidden");
       ($("btn-lock") as HTMLButtonElement).disabled = false;
       $("btn-lock").textContent = "LOCK IN ▸";
-      toast("BUILD PHASE — lock in when ready");
+      toast("BUILD PHASE: lock in when ready");
       refreshPanels();
       break;
     }
@@ -711,7 +718,7 @@ function handleRelay(t: string, payload: unknown) {
     }
     case "checksum": break;
     case "pong": break;
-    case "peer_disconnected": toast(`Opponent disconnected — ${p.graceSec}s to reconnect`); break;
+    case "peer_disconnected": toast(`Opponent disconnected: ${p.graceSec}s to reconnect`); break;
     case "peer_reconnected": toast("Opponent reconnected"); break;
     case "result": {
       const winner = p.winner as number | null;
@@ -841,7 +848,7 @@ function refreshPanels() {
   const st = robotStats(bp);
   const maxMass = maxMassFor();
   const limited = Number.isFinite(maxMass);
-  $("mass-num").textContent = limited ? `${Math.round(st.mass)}/${maxMass}` : `${Math.round(st.mass)} kg — no limit`;
+  $("mass-num").textContent = limited ? `${Math.round(st.mass)}/${maxMass}` : `${Math.round(st.mass)} kg, no limit`;
   const fill = $("mass-fill");
   fill.style.width = limited ? `${Math.min(100, (st.mass / maxMass) * 100)}%` : "0%";
   fill.className = !limited ? "" : st.mass > maxMass ? "over" : st.mass > maxMass * 0.85 ? "warn" : "";
@@ -885,7 +892,7 @@ function refreshPanels() {
       const d = NODE_DEFS[n.type];
       const target = n.params.part ? ` [${partLabel(n.params.part as string)}]` : "";
       return `· ${d?.name ?? n.type}${target}`;
-    }).join("<br>") || '<span style="color:var(--dim)">No logic yet — add nodes below.</span>';
+    }).join("<br>") || '<span style="color:var(--dim)">No logic yet. Add nodes below.</span>';
   }
 
   // preflight checklist in build mode
@@ -1057,7 +1064,7 @@ function renderLogicProps(nodeId: string | null) {
   const n = bp.logic.find((q) => q.id === nodeId);
   if (!n) { el.classList.add("hidden"); return; }
   const def = NODE_DEFS[n.type];
-  let html = `<b style="color:var(--accent)">${def?.name ?? n.type}</b> — ${def?.desc ?? ""}<br>`;
+  let html = `<b style="color:var(--accent)">${def?.name ?? n.type}</b>: ${def?.desc ?? ""}<br>`;
   for (const p of def?.params ?? []) {
     if (p.kind === "number") {
       html += `${p.label}: <input type="number" step="0.1" value="${n.params[p.key] ?? 0}" data-node="${n.id}" data-param="${p.key}">`;
@@ -1077,6 +1084,76 @@ function renderLogicProps(nodeId: string | null) {
       if (node) node.params[key] = t.type === "number" ? parseFloat(t.value) : t.value;
       refreshPanels();
     });
+  }
+}
+
+// ==========================================================================
+// tutorial
+
+function runTutorialCheck() {
+  if (screen !== "game") return;
+  const step = TUTORIAL_STEPS[tutorial.step];
+  if (!step) { finishTutorial(); return; }
+  const args: TutorialCheckArgs = {
+    bp,
+    mode,
+    battleKind,
+    simTick: sim?.tick ?? 0,
+    playerMoved: tutorial.playerMoved,
+    testUsed: tutorial.testUsed,
+  };
+  if (checkStep(step, args)) {
+    sfx.uiClick();
+    tutorial.step++;
+    renderTutorial();
+    if (tutorial.step >= TUTORIAL_STEPS.length) finishTutorial();
+  }
+}
+
+function renderTutorial() {
+  const el = $("tutorial");
+  if (!tutorial.active || tutorial.done || tutorial.step >= TUTORIAL_STEPS.length) {
+    el.classList.add("hidden");
+    return;
+  }
+  el.classList.remove("hidden");
+  const step = TUTORIAL_STEPS[tutorial.step]!;
+  $("tut-step-num").textContent = `${tutorial.step + 1}/${TUTORIAL_STEPS.length}`;
+  $("tut-title").textContent = step.title;
+  $("tut-body").textContent = step.body;
+  $("tut-hint").textContent = step.hint ? `hint: ${step.hint}` : "";
+  const dots = $("tut-dots");
+  dots.innerHTML = TUTORIAL_STEPS.map((s, i) => {
+    const cls = i < tutorial.step ? "done" : i === tutorial.step ? "cur" : s.optional ? "opt" : "";
+    return `<span class="${cls}"></span>`;
+  }).join("");
+}
+
+function finishTutorial() {
+  tutorial.done = true;
+  tutorial.active = false;
+  persistDismissed();
+  $("tutorial").innerHTML = `
+    <div class="tut-head"><span class="tut-title">TUTORIAL COMPLETE</span></div>
+    <div class="tut-body" style="margin-top:6px">You built it. You wired it. You programmed it. Now go break something of someone else's.</div>`;
+  $("tutorial").classList.remove("hidden");
+  sfx.victory();
+  window.setTimeout(() => $("tutorial").classList.add("hidden"), 6000);
+}
+
+function skipTutorial() {
+  tutorial.active = false;
+  tutorial.done = true;
+  persistDismissed();
+  $("tutorial").classList.add("hidden");
+}
+
+function toggleTutorial() {
+  if (tutorial.active) { skipTutorial(); tutorial.active = true; tutorial.done = false; }
+  else {
+    tutorial.active = true;
+    if (tutorial.done) { tutorial.step = 0; tutorial.done = false; tutorial.playerMoved = false; tutorial.spawnX = null; tutorial.spawnZ = null; }
+    renderTutorial();
   }
 }
 
@@ -1151,7 +1228,7 @@ function frameBody(now: number) {
           const playerWon = winner === null ? null : battleKind === "online" ? (winner === mySlot ? 0 : 1) : winner === 0 ? 0 : 1;
           const reason =
             outcome.kind === "timeout"
-              ? "TIME LIMIT — DRAW"
+              ? "TIME LIMIT: DRAW"
               : outcome.winner === null
                 ? "MUTUAL DESTRUCTION"
                 : `robot ${(1 - (outcome.winner ?? 0)) === 0 ? "1 (YOU)" : "2 (ENEMY)"} DISABLED`;
@@ -1210,10 +1287,15 @@ function frameBody(now: number) {
     }
     // combat timeout
     if (battleKind !== null && combatDeadline > 0 && Date.now() >= combatDeadline && !resultShown && !sim.outcome) {
-      showResult(null, "TIME LIMIT — DRAW");
+      showResult(null, "TIME LIMIT: DRAW");
     }
   }
 
+  tutorialTimer += dt;
+  if (tutorialTimer > 0.5) {
+    tutorialTimer = 0;
+    if (tutorial.active && !tutorial.done) runTutorialCheck();
+  }
   renderer.update(dt);
   renderer.render(ctx, canvas.width, canvas.height, sim, bp, mode === "build");
   if (mode === "build") renderBuildOverlays(ctx);

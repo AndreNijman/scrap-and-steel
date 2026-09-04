@@ -17,16 +17,16 @@ Push touching `worker/**` → Actions deploy with the scoped
 `/health` + `/lobbies` check. Manual: `npm run deploy:worker`.
 
 - Origin allowlist lives in config (`ALLOWED_ORIGINS`), not secrets.
-- The Room DO persists state to storage and uses alarms — deploy-time
+- The Room DO persists state to storage and uses alarms: deploy-time
   hibernation cannot lose active rooms mid-build.
 
 ## Rollback
 
 - Client: revert + push (or re-run a previous Pages workflow).
 - Relay: `wrangler rollback`. Protocol version gating means a mismatched
-  client/relay pair fails cleanly instead of corrupting rooms.
+  a mismatched client/relay pair fails instead of corrupting rooms.
 
 ## Secrets policy
 
-Scoped Cloudflare API token only. Values never enter prompts, logs, source or
+Scoped Cloudflare API token only. Values stay out of prompts, logs, source and
 the client bundle. Rotation requires no code changes.
