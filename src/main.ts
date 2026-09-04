@@ -1222,6 +1222,27 @@ function renderBuildOverlays(ctx: CanvasRenderingContext2D) {
     ctx.strokeStyle = builder.ghost.valid ? "#8fdf8f" : "#e07050";
     ctx.strokeRect(gx, gy, gw, gh);
     ctx.globalAlpha = 1;
+    // drive direction preview on wheels / track units
+    if (d.wheel || d.track) {
+      const cx = gx + gw / 2;
+      const cy = gy + gh / 2;
+      const s = Math.max(7, z * 0.22);
+      ctx.save();
+      ctx.translate(cx, cy);
+      ctx.globalAlpha = 0.9;
+      for (const pass of [0, 1]) {
+        ctx.fillStyle = pass === 0 ? "#10141a" : builder.ghost.valid ? "#7fe37f" : "#c05038";
+        const o = pass === 0 ? 0 : -s * 0.9;
+        ctx.beginPath();
+        ctx.moveTo(o - s * 0.2, -s * 0.55);
+        ctx.lineTo(o + s * 0.45, 0);
+        ctx.lineTo(o - s * 0.2, s * 0.55);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
   }
   // wire preview
   if (builder.tool === "wire" && builder.wireFrom) {

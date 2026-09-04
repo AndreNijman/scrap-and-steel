@@ -40,6 +40,7 @@ export interface RobotSide {
   weaponCooldown: Map<string, number>;
   motorTemps: Map<string, number>;
   lastResult: { mobility: boolean; offense: boolean; control: boolean };
+  totalMassKg: () => number;
   capBufferKJ: number;
   railCharge: number;
   adjacency: Map<string, string[]> | null;
@@ -111,6 +112,11 @@ export class Simulation {
 
     const mk = (bp: Blueprint, idx: number, ox: number): RobotSide => {
       const phys = buildRobotWorld(this.world, bp, { ox, robotBits: 0x0002 | (idx === 0 ? 0x0020 : 0x0040), groundAlign: true });
+      const totalMassKg = () => {
+        let m = 0;
+        for (const [, pb] of phys.bodies) if (!pb.destroyed) m += pb.def.mass;
+        return m;
+      };
       const net = createNet(bp);
       const side: RobotSide = {
         index: idx, bp, phys, net,
@@ -120,6 +126,7 @@ export class Simulation {
         partsLost: 0, damageDealt: 0,
         heat: new Map(), ammo: new Map(), weaponCooldown: new Map(), motorTemps: new Map(),
         lastResult: { mobility: false, offense: false, control: false },
+        totalMassKg,
         capBufferKJ: 0, railCharge: 0, adjacency: null,
       };
       for (const p of bp.parts) {
@@ -312,16 +319,18 @@ export class Simulation {
     const sideB = this.sideOfPart(userB);
     const dmg = Math.min(120, (impulse - MIN_DAMAGE_IMPULSE) * 0.06); // capped: one ram never one-shots
     if (sideA && sideB && sideA !== sideB) {
-      // robot vs robot: both take damage, scaled by armor
-      this.damagePart(sideA, userA, dmg);
-      this.damagePart(sideB, userB, dmg);
+      // robot vs robot: mass matters — heavies shrug off impacts that shred lights
+      const massA = Math.max(sideA.totalMassKg(), 50);
+      const massB = Math.max(sideB.totalMassKg(), 50);
+      this.damagePart(sideA, userA, dmg * Math.min(3, Math.max(0.3, massB / massA)));
+      this.damagePart(sideB, userB, dmg * Math.min(3, Math.max(0.3, massA / massB)));
       sideA.damageDealt += dmg;
       sideB.damageDealt += dmg;
       this.events.onHit?.(sideA.index, userA, dmg);
     } else if (sideA && !sideB) {
-      this.damagePart(sideA, userA, dmg * 0.5);
+      this.damagePart(sideA, userA, dmg * 0.35);
     } else if (sideB && !sideA) {
-      this.damagePart(sideB, userB, dmg * 0.5);
+      this.damagePart(sideB, userB, dmg * 0.35);
     }
   }
 
