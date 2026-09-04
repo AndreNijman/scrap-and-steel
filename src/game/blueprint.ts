@@ -239,8 +239,8 @@ export function preflight(bp: Blueprint, maxMass: number): ChecklistItem[] {
   return items;
 }
 
-function countPowered(bp: Blueprint, pred: (d: PartDef) => boolean): number {
-  // power reachability over wires
+/** Parts reachable from any power source through the wire graph. */
+export function wiredToPower(bp: Blueprint): Set<string> {
   const powered = new Set<string>();
   const wireAdj = new Map<string, string[]>();
   for (const w of bp.wires) {
@@ -250,23 +250,23 @@ function countPowered(bp: Blueprint, pred: (d: PartDef) => boolean): number {
     wireAdj.get(w.b.part)!.push(w.a.part);
   }
   for (const p of bp.parts) {
-    const d = part(p.def);
-    if (d.source || d.idleWatts === undefined) {
-      if (d.source) {
-        const seen = new Set<string>([p.id]);
-        const q = [p.id];
-        while (q.length) {
-          const cur = q.shift()!;
-          powered.add(cur);
-          for (const n of wireAdj.get(cur) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
-        }
-      }
+    if (!part(p.def).source) continue;
+    const seen = new Set<string>([p.id]);
+    const q = [p.id];
+    while (q.length) {
+      const cur = q.shift()!;
+      powered.add(cur);
+      for (const n of wireAdj.get(cur) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
     }
   }
+  return powered;
+}
+
+function countPowered(bp: Blueprint, pred: (d: PartDef) => boolean): number {
+  const powered = wiredToPower(bp);
   let n = 0;
   for (const p of bp.parts) {
-    const d = part(p.def);
-    if (pred(d) && powered.has(p.id)) n++;
+    if (pred(part(p.def)) && powered.has(p.id)) n++;
   }
   return n;
 }

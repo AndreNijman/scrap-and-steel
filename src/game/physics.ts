@@ -44,6 +44,41 @@ const CAT_TERRAIN = 0x0004;
 const CAT_PROJECTILE = 0x0008;
 const CAT_PART = 0x0010; // loose debris
 
+/** Assign each wheel (and track unit) the nearest motor through the weld graph.
+ *  The chassis IS the drivetrain: a motor bolted anywhere on the connected
+ *  structure drives the wheels on the same structure. */
+export function assignDriveMotors(bp: Blueprint): Map<string, string | null> {
+  const adj = computeAdjacency(bp);
+  const weldAdj = new Map<string, string[]>();
+  for (const a of adj) {
+    if (!weldAdj.has(a.a)) weldAdj.set(a.a, []);
+    if (!weldAdj.has(a.b)) weldAdj.set(a.b, []);
+    weldAdj.get(a.a)!.push(a.b);
+    weldAdj.get(a.b)!.push(a.a);
+  }
+  const partById = new Map(bp.parts.map((p) => [p.id, p] as const));
+  const out = new Map<string, string | null>();
+  for (const p of bp.parts) {
+    const d = part(p.def);
+    if (!d.wheel && !d.track) continue;
+    const seen = new Set<string>([p.id]);
+    const q: string[] = [p.id];
+    let motorId: string | null = null;
+    while (q.length && !motorId) {
+      const cur = q.shift()!;
+      for (const n of weldAdj.get(cur) ?? []) {
+        if (seen.has(n)) continue;
+        seen.add(n);
+        const nd = part(partById.get(n)!.def);
+        if (nd.motor) { motorId = n; break; }
+        q.push(n);
+      }
+    }
+    out.set(p.id, motorId);
+  }
+  return out;
+}
+
 function shapeFor(def: ReturnType<typeof part>): planck.Shape {
   const w = (def.w * CELL) / 2;
   const h = (def.h * CELL) / 2;
@@ -163,33 +198,18 @@ export function buildRobotWorld(world: planck.World, bp: Blueprint, opts: { ox: 
 
   // drive coupling: each wheel is assigned the NEAREST motor through the weld
   // graph (the chassis is the drivetrain). No motor = the wheel rolls free.
-  // Destroying the motor or cutting its welds deassigns the wheel at runtime.
-  {
-    const weldAdj = new Map<string, string[]>();
-    for (const a of adj) {
-      if (!weldAdj.has(a.a)) weldAdj.set(a.a, []);
-      if (!weldAdj.has(a.b)) weldAdj.set(a.b, []);
-      weldAdj.get(a.a)!.push(a.b);
-      weldAdj.get(a.b)!.push(a.a);
-    }
-    for (const w of phys.wheels) {
-      // BFS from the wheel to the nearest motor part
-      const seen = new Set<string>([w.partId]);
-      const q: string[] = [w.partId];
-      let motorId: string | null = null;
-      while (q.length && !motorId) {
-        const cur = q.shift()!;
-        for (const n of weldAdj.get(cur) ?? []) {
-          if (seen.has(n)) continue;
-          seen.add(n);
-          const nd = part(partById.get(n)!.def);
-          if (nd.motor) { motorId = n; break; }
-          q.push(n);
-        }
-      }
-      w.motorPartId = motorId;
-      if (motorId) w.joint.enableMotor(true);
-    }
+  const assignments = assignDriveMotors(bp);
+  for (const w of phys.wheels) {
+    w.motorPartId = assignments.get(w.partId) ?? null;
+    if (w.motorPartId) w.joint.enableMotor(true);
+  }
+
+  // track units: self-motorised drive modules (register for actuation + mobility)
+  for (const { p } of rects) {
+    const d = part(p.def);
+    if (!d.track) continue;
+    const T = phys.bodies.get(p.id)!;
+    phys.tracks.push({ partId: p.id, motorPartId: null, grip: d.track.grip, body: T.body });
   }
 
   // spinners: revolute to structural mount, motorized

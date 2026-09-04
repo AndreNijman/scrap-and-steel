@@ -5,8 +5,9 @@
 import planck from "planck-js";
 import type { Simulation, RobotSide } from "../game/sim";
 import type { Blueprint } from "../game/blueprint";
-import { partRect } from "../game/blueprint";
+import { assignDriveMotors } from "../game/physics";
 import { part, CELL } from "../game/parts";
+import { partRect, wiredToPower } from "../game/blueprint";
 import { getSprite, isCircularSprite, C } from "./sprites";
 
 export interface Particle {
@@ -173,6 +174,45 @@ export class WorldRenderer {
     for (const p of bp.parts) {
       this.drawPartStatic(ctx, p, tx, tyDown, z);
     }
+
+    // drive direction indicators on powered wheels / track units
+    const assignments = assignDriveMotors(bp);
+    const wired = wiredToPower(bp);
+    for (const p of bp.parts) {
+      const d = part(p.def);
+      if (!d.wheel && !d.track) continue;
+      const motorId = assignments.get(p.id) ?? null;
+      if (!motorId) continue; // undriven wheel: rolls free, no arrow
+      const r = partRect(p);
+      const sx = tx((r.x + r.w / 2) * CELL);
+      const sy = tyDown((r.y + r.h / 2) * CELL);
+      const lit = wired.has(motorId);
+      this.drawDriveChevrons(ctx, sx, sy, z, 1, lit ? 0.9 : 0.3, lit ? "#7fe37f" : "#8a939e");
+    }
+  }
+
+  /** double chevron showing the +x (FORWARD) travel direction of a drive unit */
+  private drawDriveChevrons(ctx: CanvasRenderingContext2D, sx: number, sy: number, z: number, dir: 1 | -1, alpha: number, color: string) {
+    const s = Math.max(6, z * 0.22);
+    ctx.save();
+    ctx.translate(sx, sy);
+    ctx.scale(dir, 1);
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = "#10141a";
+    ctx.lineWidth = 3;
+    for (const pass of [0, 1]) {
+      ctx.fillStyle = pass === 0 ? "#10141a" : color;
+      ctx.beginPath();
+      const o = pass === 0 ? 0 : -s * 0.9;
+      ctx.moveTo(o - s * 0.2, -s * 0.55);
+      ctx.lineTo(o + s * 0.45, 0);
+      ctx.lineTo(o - s * 0.2, s * 0.55);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+    }
+    ctx.restore();
+    ctx.globalAlpha = 1;
   }
 
   /** Wire looms. toScreen resolves an endpoint to SCREEN px; net optional (flow/trip). */
@@ -327,6 +367,25 @@ export class WorldRenderer {
     // robots
     for (const side of sim.robots) {
       if (!side) continue;
+      // live drive direction chevrons on wheels/tracks
+      for (const wheel of side.phys.wheels) {
+        if (!wheel.motorPartId) continue;
+        const pb = side.phys.bodies.get(wheel.partId);
+        if (!pb || pb.destroyed) continue;
+        const cmd = sim.lastMotorPowers.get(wheel.motorPartId) ?? 0;
+        const dir: 1 | -1 = cmd < -0.02 ? -1 : 1;
+        const alpha = Math.abs(cmd) > 0.02 ? 0.35 + Math.min(0.6, Math.abs(cmd) * 0.6) : 0.28;
+        const pos = pb.body.getPosition();
+        this.drawDriveChevrons(ctx, tx(pos.x), ty(pos.y), z, dir, alpha, side.index === 0 ? "#9fe39f" : "#ff9f8a");
+      }
+      for (const t of side.phys.tracks) {
+        const pb = side.phys.bodies.get(t.partId);
+        if (!pb || pb.destroyed) continue;
+        const cmd = sim.lastMotorPowers.get(t.partId) ?? 0;
+        if (Math.abs(cmd) < 0.02) continue;
+        const pos = pb.body.getPosition();
+        this.drawDriveChevrons(ctx, tx(pos.x), ty(pos.y), z, cmd < 0 ? -1 : 1, 0.85, side.index === 0 ? "#9fe39f" : "#ff9f8a");
+      }
       const teamTint = side.index === 0 ? "rgba(90,160,255,0.12)" : "rgba(255,120,90,0.12)";
       for (const p of side.bp.parts) {
         const pb = side.phys.bodies.get(p.id);
