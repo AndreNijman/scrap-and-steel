@@ -4,7 +4,7 @@
 
 export type Category = "structure" | "armour" | "motion" | "electrical" | "control" | "sensors" | "weapons" | "utility" | "hydraulics";
 
-export type PortKind = "power" | "data" | "fluid";
+export type PortKind = "power" | "data" | "fluid" | "shaft";
 
 export interface Port {
   /** side of the footprint: 0=left 1=top 2=right 3=bottom */
@@ -104,19 +104,19 @@ export const PARTS: PartDef[] = [
   { id: "arm_spaced", name: "Spaced Armour", cat: "armour", desc: "Outer sacrificial shell over an air gap.", w: 1, h: 1, mass: 22, hp: 260, cost: 55, shape: "box", armor: 0.6, ports: [] },
 
   // ================= MOTION =================
-  { id: "wheel_small", name: "Small Wheel", cat: "motion", desc: "Ø0.4 m. Light and quick to spin up.", w: 1, h: 1, mass: 12, hp: 90, cost: 30, shape: "wheel", ports: [], wheel: { radius: 0.2, grip: 1.1, powered: false } },
-  { id: "wheel_medium", name: "Medium Wheel", cat: "motion", desc: "Ø0.5 m general-purpose wheel.", w: 1, h: 1, mass: 18, hp: 130, cost: 45, shape: "wheel", ports: [], wheel: { radius: 0.25, grip: 1.25, powered: false } },
-  { id: "wheel_large", name: "Large Wheel", cat: "motion", desc: "Ø0.8 m. Climbs obstacles well.", w: 2, h: 2, mass: 40, hp: 200, cost: 85, shape: "wheel", ports: [], wheel: { radius: 0.4, grip: 1.3, powered: false } },
-  { id: "wheel_racing", name: "Racing Wheel", cat: "motion", desc: "Low rolling resistance, high top speed.", w: 1, h: 1, mass: 14, hp: 80, cost: 90, shape: "wheel", ports: [], wheel: { radius: 0.26, grip: 1.0, powered: false } },
-  { id: "wheel_offroad", name: "Off-Road Wheel", cat: "motion", desc: "Deep lugs. Grips loose terrain.", w: 2, h: 2, mass: 44, hp: 240, cost: 120, shape: "wheel", ports: [], wheel: { radius: 0.42, grip: 1.6, powered: false } },
-  { id: "wheel_armored", name: "Armoured Wheel", cat: "motion", desc: "Protected hub. Survives incoming fire.", w: 2, h: 2, mass: 60, hp: 420, cost: 190, shape: "wheel", ports: [], wheel: { radius: 0.4, grip: 1.2, powered: false } },
-  { id: "wheel_omni", name: "Omni Wheel", cat: "motion", desc: "Rollers around the rim. Slips sideways less.", w: 1, h: 1, mass: 16, hp: 90, cost: 110, shape: "wheel", ports: [], wheel: { radius: 0.25, grip: 0.9, powered: false } },
-  { id: "wheel_caster", name: "Caster", cat: "motion", desc: "Unpowered support wheel.", w: 1, h: 1, mass: 8, hp: 70, cost: 18, shape: "wheel", ports: [], wheel: { radius: 0.16, grip: 0.8, powered: false } },
+  { id: "wheel_small", name: "Small Wheel", cat: "motion", desc: "Ø0.4 m. Light and quick to spin up.", w: 1, h: 1, mass: 12, hp: 90, cost: 30, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.2, grip: 1.1, powered: false } },
+  { id: "wheel_medium", name: "Medium Wheel", cat: "motion", desc: "Ø0.5 m general-purpose wheel.", w: 1, h: 1, mass: 18, hp: 130, cost: 45, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.25, grip: 1.25, powered: false } },
+  { id: "wheel_large", name: "Large Wheel", cat: "motion", desc: "Ø0.8 m. Climbs obstacles well.", w: 2, h: 2, mass: 40, hp: 200, cost: 85, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.4, grip: 1.3, powered: false } },
+  { id: "wheel_racing", name: "Racing Wheel", cat: "motion", desc: "Low rolling resistance, high top speed.", w: 1, h: 1, mass: 14, hp: 80, cost: 90, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.26, grip: 1.0, powered: false } },
+  { id: "wheel_offroad", name: "Off-Road Wheel", cat: "motion", desc: "Deep lugs. Grips loose terrain.", w: 2, h: 2, mass: 44, hp: 240, cost: 120, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.42, grip: 1.6, powered: false } },
+  { id: "wheel_armored", name: "Armoured Wheel", cat: "motion", desc: "Protected hub. Survives incoming fire.", w: 2, h: 2, mass: 60, hp: 420, cost: 190, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.4, grip: 1.2, powered: false } },
+  { id: "wheel_omni", name: "Omni Wheel", cat: "motion", desc: "Rollers around the rim. Slips sideways less.", w: 1, h: 1, mass: 16, hp: 90, cost: 110, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.25, grip: 0.9, powered: false } },
+  { id: "wheel_caster", name: "Caster", cat: "motion", desc: "Unpowered support wheel.", w: 1, h: 1, mass: 8, hp: 70, cost: 18, shape: "wheel", ports: [P(1, 0.5, "shaft", "in")], wheel: { radius: 0.16, grip: 0.8, powered: false } },
   { id: "track_unit", name: "Track Drive Unit", cat: "motion", desc: "Motorised track module with its own contact patch.", w: 2, h: 2, mass: 80, hp: 320, cost: 220, shape: "box", armor: 0.9, ports: [P(0, 0.5, "power", "in")], track: { grip: 1.7 } },
-  { id: "motor_small", name: "Compact Motor", cat: "motion", desc: "120 W toy of a motor. Light duty.", w: 1, h: 1, mass: 14, hp: 90, cost: 70, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], motor: { torque: 55, rpm: 260, watts: 320, heat: 0.5 } },
-  { id: "motor_torque", name: "High-Torque Motor", cat: "motion", desc: "Grinds hard, spins slow.", w: 2, h: 1, mass: 44, hp: 150, cost: 210, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], motor: { torque: 320, rpm: 110, watts: 900, heat: 0.9 } },
-  { id: "motor_speed", name: "High-Speed Motor", cat: "motion", desc: "Screams. Great with big wheels.", w: 2, h: 1, mass: 30, hp: 110, cost: 240, shape: "box", armor: 1.05, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], motor: { torque: 90, rpm: 520, watts: 1100, heat: 1.0 } },
-  { id: "motor_industrial", name: "Industrial Motor", cat: "motion", desc: "Traction at any price.", w: 2, h: 2, mass: 90, hp: 240, cost: 520, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io")], motor: { torque: 700, rpm: 170, watts: 2400, heat: 1.1 } },
+  { id: "motor_small", name: "Compact Motor", cat: "motion", desc: "120 W toy of a motor. Light duty.", w: 1, h: 1, mass: 14, hp: 90, cost: 70, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io"), P(1, 0.5, "shaft", "out")], motor: { torque: 55, rpm: 260, watts: 320, heat: 0.5 } },
+  { id: "motor_torque", name: "High-Torque Motor", cat: "motion", desc: "Grinds hard, spins slow.", w: 2, h: 1, mass: 44, hp: 150, cost: 210, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io"), P(1, 0.5, "shaft", "out")], motor: { torque: 320, rpm: 110, watts: 900, heat: 0.9 } },
+  { id: "motor_speed", name: "High-Speed Motor", cat: "motion", desc: "Screams. Great with big wheels.", w: 2, h: 1, mass: 30, hp: 110, cost: 240, shape: "box", armor: 1.05, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io"), P(1, 0.5, "shaft", "out")], motor: { torque: 90, rpm: 520, watts: 1100, heat: 1.0 } },
+  { id: "motor_industrial", name: "Industrial Motor", cat: "motion", desc: "Traction at any price.", w: 2, h: 2, mass: 90, hp: 240, cost: 520, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(2, 0.5, "power", "io"), P(1, 0.5, "shaft", "out")], motor: { torque: 700, rpm: 170, watts: 2400, heat: 1.1 } },
   { id: "servo", name: "Servo", cat: "motion", desc: "Position-controlled joint. Aim turrets, arms.", w: 1, h: 1, mass: 12, hp: 90, cost: 140, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(1, 0.5, "data", "in")], servo: { torque: 90, speed: 3.2, watts: 120 } },
   { id: "linear_actuator", name: "Linear Actuator", cat: "motion", desc: "Electric ram. Pushes 0.5 m.", w: 2, h: 1, mass: 26, hp: 130, cost: 190, shape: "box", armor: 1.0, ports: [P(0, 0.5, "power", "in"), P(1, 0.5, "data", "in")], piston: { force: 9000, speed: 0.8, range: 0.5, watts: 350 } },
   { id: "spinner_disc", name: "Spinner Disc", cat: "motion", desc: "Weapon-grade flywheel disc. Shreds on contact.", w: 2, h: 2, mass: 70, hp: 260, cost: 260, shape: "disc", ports: [], weapon: { kind: "spinner", dmg: 34, watts: 1400, heat: 1.0 } },

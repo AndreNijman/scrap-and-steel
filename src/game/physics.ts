@@ -44,37 +44,25 @@ const CAT_TERRAIN = 0x0004;
 const CAT_PROJECTILE = 0x0008;
 const CAT_PART = 0x0010; // loose debris
 
-/** Assign each wheel (and track unit) the nearest motor through the weld graph.
- *  The chassis IS the drivetrain: a motor bolted anywhere on the connected
- *  structure drives the wheels on the same structure. */
+/** Assign each wheel the motor that a DRIVESHAFT wire couples it to.
+ *  One motor can drive several wheels through separate shafts. No shaft =
+ *  the wheel rolls free. */
 export function assignDriveMotors(bp: Blueprint): Map<string, string | null> {
-  const adj = computeAdjacency(bp);
-  const weldAdj = new Map<string, string[]>();
-  for (const a of adj) {
-    if (!weldAdj.has(a.a)) weldAdj.set(a.a, []);
-    if (!weldAdj.has(a.b)) weldAdj.set(a.b, []);
-    weldAdj.get(a.a)!.push(a.b);
-    weldAdj.get(a.b)!.push(a.a);
-  }
-  const partById = new Map(bp.parts.map((p) => [p.id, p] as const));
   const out = new Map<string, string | null>();
+  const isMotor = new Map<string, boolean>();
+  for (const p of bp.parts) isMotor.set(p.id, !!part(p.def).motor);
   for (const p of bp.parts) {
-    const d = part(p.def);
-    if (!d.wheel && !d.track) continue;
-    const seen = new Set<string>([p.id]);
-    const q: string[] = [p.id];
-    let motorId: string | null = null;
-    while (q.length && !motorId) {
-      const cur = q.shift()!;
-      for (const n of weldAdj.get(cur) ?? []) {
-        if (seen.has(n)) continue;
-        seen.add(n);
-        const nd = part(partById.get(n)!.def);
-        if (nd.motor) { motorId = n; break; }
-        q.push(n);
-      }
+    if (part(p.def).wheel) out.set(p.id, null);
+  }
+  for (const w of bp.wires) {
+    if ((w.kind ?? "power") !== "shaft") continue;
+    const aIsMotor = isMotor.get(w.a.part);
+    const bIsMotor = isMotor.get(w.b.part);
+    if (aIsMotor && !bIsMotor) {
+      if (!out.get(w.b.part)) out.set(w.b.part, w.a.part);
+    } else if (bIsMotor && !aIsMotor) {
+      if (!out.get(w.a.part)) out.set(w.a.part, w.b.part);
     }
-    out.set(p.id, motorId);
   }
   return out;
 }
@@ -121,7 +109,7 @@ export function buildRobotWorld(world: planck.World, bp: Blueprint, opts: { ox: 
   }
   phys.bounds = { minX, minY, w: maxX - minX, h: maxY - minY };
   // align the robot's lowest row to the ground unless an explicit oy is given
-  const oy = opts.oy ?? (opts.groundAlign ? maxY * CELL + 0.01 : 0);
+  const oy = opts.oy ?? (opts.groundAlign ? maxY * CELL - 0.01 : 0); // hair below ground: contact forms at spawn
 
   // bodies
   for (const { p, r } of rects) {
@@ -137,7 +125,7 @@ export function buildRobotWorld(world: planck.World, bp: Blueprint, opts: { ox: 
     const density = d.mass / (d.w * d.h * CELL * CELL);
     const fixture = body.createFixture(shapeFor(d), {
       density: Math.max(0.2, density),
-      friction: d.wheel ? (d.wheel?.grip ?? 1) * 0.85 : 0.55,
+      friction: d.wheel ? 0.05 : 0.55,
       restitution: 0.02,
       filterCategoryBits: robotBits,
       filterMaskBits: 0xffff,

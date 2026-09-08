@@ -26,6 +26,11 @@ export interface TutorialStep {
   optional?: boolean;
 }
 
+function shaftedWheelsAdd(set: Set<string>, a: string, b: string) {
+  set.add(a);
+  set.add(b);
+}
+
 export function wheelHasMotor(bp: Blueprint, wheelId: string): boolean {
   // wheel must touch a motor through adjacency (one edge)
   for (const a of computeAdjacency(bp)) {
@@ -57,11 +62,27 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: "motors",
     title: "ADD MOTORS",
-    body: "Wheels need a motor touching them to spin. Place one motor against each wheel, edge to edge.",
+    body: "Each wheel needs a motor. Place one near each wheel, anywhere on the chassis. The wheel does not have to touch it.",
     hint: "MOTION tab: Compact Motor",
     check: ({ bp }) => {
       const wheels = bp.parts.filter((p) => part(p.def).wheel);
       return wheels.length > 0 && wheels.every((w) => wheelHasMotor(bp, w.id));
+    },
+  },
+  {
+    id: "shaft",
+    title: "CONNECT DRIVESHAFTS",
+    body: "WIRE mode: click the motor's S port (white circle), then click near the wheel. A driveshaft couples them. Green arrows on the wheels mean they will drive.",
+    hint: "WIRE tool: motor S port to wheel",
+    check: ({ bp }) => {
+      const wheels = bp.parts.filter((p) => part(p.def).wheel);
+      if (!wheels.length) return false;
+      const shafted = new Set<string>();
+      for (const w of bp.wires) {
+        if ((w.kind ?? "power") !== "shaft") continue;
+        shaftedWheelsAdd(shafted, w.a.part, w.b.part);
+      }
+      return wheels.every((w) => shafted.has(w.id));
     },
   },
   {
@@ -75,7 +96,7 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: "wire",
     title: "WIRE IT",
-    body: "Press 3 or click WIRE. Click a battery port (small circle), then a motor port. Wire battery to each motor and to the controller. No wire, no power.",
+    body: "Press 3 or click WIRE. Click a battery port, then the motor and controller ports. Power flows through wires. No wire, no power.",
     hint: "tool: WIRE",
     check: ({ bp }) => {
       const powered = wiredToPower(bp);

@@ -1,0 +1,13 @@
+import { chromium } from "playwright";
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.goto("http://localhost:5199/", { waitUntil: "load" });
+await page.waitForTimeout(2500);
+await page.click("#btn-workshop");
+await page.waitForTimeout(400);
+await page.evaluate(() => window.__dev.loadCart());
+await page.waitForTimeout(300);
+const bp = await page.evaluate(() => window.__dev.bp());
+await import("node:fs").then((fs) => fs.writeFileSync("/tmp/browser-cart.json", JSON.stringify(bp)));
+console.log("dumped", bp.parts.length, "parts");
+await browser.close();

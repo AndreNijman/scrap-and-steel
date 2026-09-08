@@ -168,7 +168,7 @@ function showHelp() {
     <h3>FIELD MANUAL</h3>
     <ul>
       <li><b>BUILD:</b> pick a category, click parts, drag them onto the grid. R rotates, right-click removes, C/V copies and pastes.</li>
-      <li><b>WIRE:</b> switch to WIRE mode. Click a port (small circles on part edges), then click another port. Batteries OUTPUT power; motors, weapons and sensors have INPUT ports. No wire = no power.</li>
+      <li><b>WIRE:</b> switch to WIRE mode. Click a port (small circles on part edges), then click another port. Batteries OUTPUT power; motors, weapons and sensors have INPUT ports. Motor S ports take DRIVESHAFTS to wheels. No wire, no power. No driveshaft, no drive.</li>
       <li><b>LOGIC:</b> the bottom panel is your robot's brain. Add INPUT nodes (keys, sensors), MATH/LOGIC nodes, and OUTPUT nodes bound to specific motors and weapons. A starter drive: INPUT FORWARD − INPUT REVERSE → MOTOR POWER.</li>
       <li><b>TEST:</b> press TEST. Physics run. Drive with W/S, fire with SPACE, aux with SHIFT, turret Q/E. Break it, learn, press TEST again to rebuild instantly.</li>
       <li><b>DIAG:</b> diagnostic mode shows wire current flow and lets you click any component for live readouts.</li>
@@ -1480,11 +1480,13 @@ Object.defineProperty(window as unknown as { __zoom: number }, "__zoom", { get: 
     const cpu = P("micro_controller", 0, -1);
     const m1 = P("motor_small", 1, 2);
     const m2 = P("motor_small", 2, 2);
-    P("wheel_medium", 1, 3);
-    P("wheel_medium", 2, 3);
+    const w1 = P("wheel_medium", 1, 3);
+    const w2 = P("wheel_medium", 2, 3);
     W(bat, 0, cpu, 0);
     W(bat, 0, m1, 0);
-    W(m1, 2, m2, 0);
+    W(m1, 1, m2, 0);
+    b.wires.push({ id: uid("w"), a: { part: m1.id, port: 2 }, b: { part: w1.id, port: 0 }, kind: "shaft" });
+    b.wires.push({ id: uid("w"), a: { part: m2.id, port: 2 }, b: { part: w2.id, port: 0 }, kind: "shaft" });
     // drive logic: FORWARD - REVERSE -> both motors
     const kf = { id: uid("n"), type: "key_forward", x: 0, y: 0, params: {}, in: {} };
     const kb = { id: uid("n"), type: "key_back", x: 0, y: 2, params: {}, in: {} };

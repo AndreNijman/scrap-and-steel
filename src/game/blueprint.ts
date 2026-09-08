@@ -12,10 +12,15 @@ export interface PlacedPart {
   rot: 0 | 1 | 2 | 3; // 90° steps (2D: 0 or 2 = flipped, 1/3 = rotated)
 }
 
+export type WireKind = "power" | "shaft";
+
 export interface Wire {
   id: string;
   a: { part: string; port: number };
   b: { part: string; port: number };
+  /** power wires feed loads; shaft wires couple motors to wheels. Old saves
+   *  without the field are power wires. */
+  kind?: WireKind;
 }
 
 import type { LogicNode } from "./logic";
@@ -48,9 +53,46 @@ export function migrateBlueprint(raw: unknown): Blueprint | null {
   if (typeof raw !== "object" || raw === null) return null;
   const bp = raw as Record<string, unknown>;
   if (bp.version === 2 && Array.isArray(bp.parts) && Array.isArray(bp.wires) && Array.isArray(bp.logic)) {
-    return bp as unknown as Blueprint;
+    const out = bp as unknown as Blueprint;
+    // migration: pre-driveshaft saves coupled motors to wheels by adjacency.
+    // Give every motor-adjacent wheel an explicit shaft wire so old saves
+    // keep driving.
+    for (const w of out.wires) if (!w.kind) w.kind = "power";
+    const hasShaft = new Set<string>();
+    for (const w of out.wires) {
+      if (w.kind !== "shaft") continue;
+      hasShaft.add(w.a.part);
+      hasShaft.add(w.b.part);
+    }
+    const byId = new Map(out.parts.map((p) => [p.id, p] as const));
+    for (const p of out.parts) {
+      if (part(p.def).wheel || hasShaft.has(p.id)) continue;
+      // wheel without a shaft: connect to an adjacent motor
+      for (const a of computeAdjacency(out)) {
+        const otherId = a.a === p.id ? a.b : a.b === p.id ? a.a : null;
+        if (!otherId) continue;
+        const od = byId.get(otherId);
+        if (!od || !part(od.def).motor) continue;
+        out.wires.push({ id: `shaft_${p.id}`, a: { part: otherId, port: motorShaftPort(od.def) }, b: { part: p.id, port: wheelShaftPort(p.def) }, kind: "shaft" });
+        hasShaft.add(p.id);
+        break;
+      }
+    }
+    return out;
   }
   return null;
+}
+
+function motorShaftPort(defId: string): number {
+  const d = part(defId);
+  const i = d.ports.findIndex((p) => p.kind === "shaft");
+  return i >= 0 ? i : 0;
+}
+
+function wheelShaftPort(defId: string): number {
+  const d = part(defId);
+  const i = d.ports.findIndex((p) => p.kind === "shaft");
+  return i >= 0 ? i : 0;
 }
 
 // ---------- geometry ----------
@@ -219,6 +261,16 @@ export function preflight(bp: Blueprint, maxMass: number): ChecklistItem[] {
   items.push({ ok: st.cpuProvided > 0 && st.cpuUsed <= st.cpuProvided, warn: st.cpuProvided > 0 && !hasCpu, text: !st.cpuProvided ? "No controller — add a microcontroller" : hasCpu ? `Controller OK — CPU ${Math.round((st.cpuUsed / Math.max(st.cpuProvided, 1)) * 100)}%` : `CPU OVERLOAD — ${st.cpuUsed} nodes on ${st.cpuProvided} slots` });
 
   const hasTracks = bp.parts.some((p) => part(p.def).track);
+  const shaftedWheels = new Set<string>();
+  for (const w of bp.wires) {
+    if ((w.kind ?? "power") !== "shaft") continue;
+    shaftedWheels.add(w.a.part);
+    shaftedWheels.add(w.b.part);
+  }
+  const bareWheels = bp.parts.filter((p) => part(p.def).wheel && !shaftedWheels.has(p.id)).length;
+  if (bareWheels > 0 && !hasTracks) {
+    items.push({ ok: false, warn: true, text: `${bareWheels} wheel(s) have no driveshaft — wire the motor shaft to the wheel` });
+  }
   const wiredMotors = countPowered(bp, (d) => !!d.motor);
   if (st.motors === 0 && !hasTracks) {
     items.push({ ok: false, warn: true, text: "No motors — the machine will not move" });

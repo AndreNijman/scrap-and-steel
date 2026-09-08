@@ -25,6 +25,8 @@ function cartBp(): Blueprint {
     { id: "wa", a: { part: "bat", port: 0 }, b: { part: "cpu", port: 0 } },
     { id: "wb", a: { part: "bat", port: 0 }, b: { part: "m1", port: 0 } },
     { id: "wc", a: { part: "m1", port: 2 }, b: { part: "m2", port: 0 } },
+    { id: "ws1", a: { part: "m1", port: 2 }, b: { part: "w1", port: 0 }, kind: "shaft" },
+    { id: "ws2", a: { part: "m2", port: 2 }, b: { part: "w2", port: 0 }, kind: "shaft" },
   ];
   bp.logic = [
     { id: "kf", type: "key_forward", x: 0, y: 0, params: {}, in: {} },
@@ -42,12 +44,15 @@ beforeAll(async () => { await ensure(); });
 describe("2D physics fixtures", () => {
   it("wired cart with drive logic accelerates forward", { timeout: 30000 }, () => {
     const sim = new Simulation({ bpA: cartBp(), bpB: null, arena: ARENAS.range!, seed: 7 });
-    sim.robots[0]!.input = { forward: 1, back: 0, fire: 0, aux: 0, turret: 0 };
+    sim.robots[0]!.input = { forward: 0, back: 1, fire: 0, aux: 0, turret: 0 }; // drive left, away from the right wall
+    for (let i = 0; i < 60; i++) sim.step(1 / 60); // traction ramps up
     const x0 = sim.robots[0]!.phys.rootBody!.getPosition().x;
-    for (let i = 0; i < 180; i++) sim.step(1 / 60);
+    for (let i = 0; i < 60; i++) sim.step(1 / 60);
     const x1 = sim.robots[0]!.phys.rootBody!.getPosition().x;
-    
-    expect(x1 - x0).toBeGreaterThan(1.5);
+    const vx = sim.robots[0]!.phys.rootBody!.getLinearVelocity().x;
+
+    expect(x0 - x1).toBeGreaterThan(0.8); // displaced while at speed
+    expect(vx).toBeLessThan(-0.8); // still moving at the end
   });
 
   it("an unwired motor never moves the robot (no hidden connections)", { timeout: 30000 }, () => {
@@ -94,14 +99,16 @@ describe("2D physics fixtures", () => {
     bp.parts.push({ id: "frame4", def: "steel_block", x: 2, y: 1, rot: 0 });
     const sim = new Simulation({ bpA: bp, bpB: null, arena: ARENAS.range!, seed: 9 });
     const rt = sim.robots[0]!;
-    rt.input = { forward: 1, back: 0, fire: 0, aux: 0, turret: 0 };
+    rt.input = { forward: 0, back: 1, fire: 0, aux: 0, turret: 0 }; // drive left
     for (let i = 0; i < 60; i++) sim.step(1 / 60);
     expect(rt.defeated).toBe(false); // no instant defeat
     expect(rt.lastResult.mobility).toBe(true);
     const x0 = rt.phys.rootBody!.getPosition().x;
-    for (let i = 0; i < 180; i++) sim.step(1 / 60);
+    for (let i = 0; i < 60; i++) sim.step(1 / 60);
     const x1 = rt.phys.rootBody!.getPosition().x;
-    expect(x1 - x0).toBeGreaterThan(1.5);
+    const vx = rt.phys.rootBody!.getLinearVelocity().x;
+    expect(x0 - x1).toBeGreaterThan(0.8); // displaced
+    expect(vx).toBeLessThan(-0.8); // still rolling
   });
 
   it("a flat bed of steel blocks stays rigid (no worm crawl)", { timeout: 60000 }, () => {

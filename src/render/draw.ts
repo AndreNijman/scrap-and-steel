@@ -227,12 +227,43 @@ export class WorldRenderer {
       const a = toScreen(wire.a.part, wire.a.port);
       const b = toScreen(wire.b.part, wire.b.port);
       if (!a || !b) continue;
-      const rt = sim ? sim.net.wires.get(wire.id) : null;
-      const color = rt?.tripped ? "#5a5a5a" : rt?.broken ? "#3a2020" : wireColor(bp, wire);
+      const rt = sim && (wire.kind ?? "power") === "power" ? sim.net.wires.get(wire.id) : null;
+      const isShaft = (wire.kind ?? "power") === "shaft";
+      const color = rt?.tripped ? "#5a5a5a" : rt?.broken ? "#3a2020" : isShaft ? "#9aa4ae" : wireColor(bp, wire);
       const ax = a.x;
       const ay = a.y;
       const bx = b.x;
       const by = b.y;
+      if (isShaft) {
+        // mechanical driveshaft: thick dark casing with a lighter spinning core
+        ctx.lineCap = "round";
+        ctx.strokeStyle = "#2b2f35";
+        ctx.lineWidth = 6;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        ctx.strokeStyle = "#767f8c";
+        ctx.lineWidth = 3;
+        ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke();
+        // rotation ticks scrolling along the shaft
+        const dx = bx - ax;
+        const dy = by - ay;
+        const len = Math.hypot(dx, dy) || 1;
+        const spin = this.time * 8;
+        ctx.strokeStyle = "#cfd6de";
+        ctx.lineWidth = 2;
+        for (let d0 = (spin % 14); d0 < len; d0 += 14) {
+          const t0 = d0 / len;
+          const px = ax + dx * t0;
+          const py = ay + dy * t0;
+          const nx = -dy / len;
+          const ny = dx / len;
+          ctx.beginPath();
+          ctx.moveTo(px - nx * 4, py - ny * 4);
+          ctx.lineTo(px + nx * 4, py + ny * 4);
+          ctx.stroke();
+        }
+        ctx.lineCap = "butt";
+        continue;
+      }
       const midY = (ay + by) / 2;
       ctx.strokeStyle = color;
       ctx.lineWidth = 2;

@@ -7,6 +7,7 @@ import { uid, partRect, rectsOverlap, partRect as rectOf, computeAdjacency, port
 import { part, CELL } from "./parts";
 
 export type Tool = "place" | "select" | "wire" | "delete";
+export type WireKind = "power" | "shaft";
 
 export interface BuilderEvents {
   onChange?: () => void;
@@ -142,16 +143,72 @@ export class Builder {
     this.events.onMessage?.("WIRE: now click the destination port (ESC cancels)");
   }
 
+  portKindOf(ref: { part: string; port: number }): string {
+    const p = this.bp.parts.find((q) => q.id === ref.part);
+    const d = p ? part(p.def) : null;
+    return d?.ports[ref.port]?.kind ?? "power";
+  }
+
+  partById(ref: { part: string; port: number }): PlacedPart | null {
+    return this.bp.parts.find((q) => q.id === ref.part) ?? null;
+  }
+
+  partDist(a: PlacedPart, b: PlacedPart): number {
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
+
   wireComplete(partId: string, portIdx: number) {
     if (!this.wireFrom) return;
     if (this.wireFrom.part === partId && this.wireFrom.port === portIdx) {
       this.wireFrom = null;
       return;
     }
+    const from = this.wireFrom;
+    const to = { part: partId, port: portIdx };
+    const fromKind = this.portKindOf(from);
+    const toKind = this.portKindOf(to);
+
+    // driveshafts: motor shaft port <-> wheel shaft port, either direction
+    if (fromKind === "shaft" || toKind === "shaft") {
+      const motor = fromKind === "shaft" && this.motorAt(from.part) ? from : toKind === "shaft" && this.motorAt(to.part) ? to : null;
+      const wheel = fromKind === "shaft" && this.wheelAt(from.part) ? from : toKind === "shaft" && this.wheelAt(to.part) ? to : null;
+      if (!motor || !wheel) {
+        this.events.onAction?.("deny");
+        this.events.onMessage?.("Driveshafts connect a MOTOR shaft to a WHEEL");
+        return;
+      }
+      const mp = this.partById(motor)!;
+      const wp = this.partById(wheel)!;
+      if (this.partDist(mp, wp) > 12) {
+        this.events.onAction?.("deny");
+        this.events.onMessage?.("Driveshaft too long (max 12 cells)");
+        return;
+      }
+      const dupe = this.bp.wires.some(
+        (w) => (w.a.part === motor.part && w.b.part === wheel.part) || (w.b.part === motor.part && w.a.part === wheel.part),
+      );
+      if (dupe) {
+        this.events.onMessage?.("Driveshaft already exists");
+        this.wireFrom = null;
+        return;
+      }
+      this.pushUndo();
+      this.bp.wires.push({ id: uid("w"), a: { part: motor.part, port: motor.port }, b: { part: wheel.part, port: wheel.port }, kind: "shaft" });
+      this.wireFrom = null;
+      this.events.onAction?.("wire");
+      this.events.onChange?.();
+      return;
+    }
+
+    if (fromKind !== toKind) {
+      this.events.onAction?.("deny");
+      this.events.onMessage?.(`Cannot connect ${fromKind} to ${toKind}`);
+      return;
+    }
     const dupe = this.bp.wires.some(
       (w) =>
-        (w.a.part === this.wireFrom!.part && w.a.port === this.wireFrom!.port && w.b.part === partId && w.b.port === portIdx) ||
-        (w.b.part === this.wireFrom!.part && w.b.port === this.wireFrom!.port && w.a.part === partId && w.a.port === portIdx),
+        (w.a.part === from.part && w.a.port === from.port && w.b.part === to.part && w.b.port === to.port) ||
+        (w.b.part === from.part && w.b.port === from.port && w.a.part === to.part && w.a.port === to.port),
     );
     if (dupe) {
       this.events.onMessage?.("Wire already exists");
@@ -159,11 +216,41 @@ export class Builder {
       return;
     }
     this.pushUndo();
-    const w: Wire = { id: uid("w"), a: this.wireFrom, b: { part: partId, port: portIdx } };
+    const w: Wire = { id: uid("w"), a: from, b: to, kind: "power" };
     this.bp.wires.push(w);
     this.wireFrom = null;
     this.events.onAction?.("wire");
     this.events.onChange?.();
+  }
+
+  motorAt(partId: string): PlacedPart | null {
+    const p = this.bp.parts.find((q) => q.id === partId);
+    return p && part(p.def).motor ? p : null;
+  }
+
+  wheelAt(partId: string): PlacedPart | null {
+    const p = this.bp.parts.find((q) => q.id === partId);
+    return p && part(p.def).wheel ? p : null;
+  }
+
+  /** nearest wheel shaft port within radius of a grid position (driveshaft snap) */
+  findShaftTarget(gx: number, gy: number, radiusCells = 3): { part: string; port: number } | null {
+    let best: { part: string; port: number } | null = null;
+    let bestDist = radiusCells;
+    for (const p of this.bp.parts) {
+      if (!part(p.def).wheel) continue;
+      const portIdx = part(p.def).ports.findIndex((q) => q.kind === "shaft");
+      if (portIdx === -1) continue;
+      const d = part(p.def);
+      const px = p.x + d.w / 2;
+      const py = p.y + d.h / 2;
+      const dist = Math.hypot(px - gx, py - gy);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = { part: p.id, port: portIdx };
+      }
+    }
+    return best;
   }
 
   /** find the port (part, index) nearest a grid position, within snapping radius */

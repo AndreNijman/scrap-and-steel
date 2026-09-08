@@ -167,6 +167,7 @@ export function solveNet(
   // 4. loads: powered if reachable from a live source through untripped wires
   const wireAdj = new Map<string, { to: string; wireId: string }[]>();
   for (const w of bp.wires) {
+    if ((w.kind ?? "power") !== "power") continue; // driveshafts are mechanical, not electrical
     const rt = net.wires.get(w.id);
     if (!rt || rt.broken) continue;
     if (!wireAdj.has(w.a.part)) wireAdj.set(w.a.part, []);

@@ -372,6 +372,19 @@ export class Simulation {
     }
   }
 
+  /** Does this wheel have a driveshaft to a living motor? */
+  shaftConnected(rt: RobotSide, wheelId: string): boolean {
+    for (const w of rt.bp.wires) {
+      if ((w.kind ?? "power") !== "shaft") continue;
+      const other = w.a.part === wheelId ? w.b.part : w.b.part === wheelId ? w.a.part : null;
+      if (!other) continue;
+      if (!aliveContains(rt, other)) continue;
+      const otherPart = rt.bp.parts.find((p) => p.id === other);
+      if (otherPart && part(otherPart.def).motor) return true;
+    }
+    return false;
+  }
+
   private aliveSet(rt: RobotSide): Set<string> {
     const s = new Set<string>();
     for (const [id, pb] of rt.phys.bodies) if (!pb.destroyed) s.add(id);
@@ -518,25 +531,43 @@ export class Simulation {
         const poweredOk = powered(p.id);
         const scale = poweredOk ? sagFactor * thermal : 0;
         const drivesAnything = side.phys.wheels.some((w) => w.motorPartId === p.id) || side.phys.tracks.some((t) => t.motorPartId === p.id);
-        // wheel joints
-        for (const wheel of side.phys.wheels) {
-          if (wheel.motorPartId !== p.id) continue;
-          const j = wheel.joint;
-          if (!this.weldConnected(side, wheel.partId, wheel.motorPartId)) { j.enableMotor(false); continue; }
-          if (this.logicCtx.brake === 1 && cmd === 0) {
-            j.setMotorSpeed(0);
-            j.setMaxMotorTorque(d.motor.torque * 2);
-            j.enableMotor(true);
-            continue;
+        // drive: traction force on the chassis along facing. Wheels spin
+        // visually at the rolling-equivalent rate (their contact friction is
+        // near zero, so nothing fights the drive).
+        const drivenWheels = side.phys.wheels.filter((w) => w.motorPartId === p.id && this.weldConnected(side, w.partId, w.motorPartId));
+        if (cmd !== 0 && powered(p.id) && drivenWheels.length) {
+          const facing = Math.cos(this.rootPos(side).angle) >= 0 ? 1 : -1;
+          const maxSpeed = ((d.motor.rpm * 2 * Math.PI) / 60) * (drivenWheels[0]!.radius);
+          const targetVx = facing * cmd * maxSpeed;
+          const rootVx = side.phys.rootBody!.getLinearVelocity().x;
+          const traction = d.wheel
+            ? (d.wheel.grip ?? 1) * 1600 * drivenWheels.length
+            : 1400;
+          const force = Math.max(-traction, Math.min(traction, (targetVx - rootVx) * 120)) * scale;
+          if (Math.abs(force) > 5) {
+            side.phys.rootBody!.applyForceToCenter(planck.Vec2(force, 0), true);
+            for (const [, pb2] of side.phys.bodies) pb2.body.setAwake(true);
           }
-          const maxOmega = (d.motor.rpm * 2 * Math.PI) / 60;
-          const targetOmega = -cmd * maxOmega; // planck +z CCW: negative drives the robot toward +x
-          const current = j.getJointSpeed();
-          const err = targetOmega - current;
-          const torque = Math.max(-d.motor.torque, Math.min(d.motor.torque, err * d.motor.torque * 0.3)) * scale;
-          j.setMaxMotorTorque(Math.abs(torque) + 0.5);
-          j.setMotorSpeed(targetOmega);
-          j.enableMotor(Math.abs(cmd) > 0.01);
+        }
+        // wheel visual spin: rolling-equivalent, flipping with the command
+        for (const wheel of drivenWheels) {
+          const wb = side.phys.bodies.get(wheel.partId);
+          if (!wb) continue;
+          const vx = side.phys.rootBody!.getLinearVelocity().x;
+          const rolling = -vx / Math.max(wheel.radius, 0.05);
+          const spin = cmd !== 0 ? -cmd * ((d.motor.rpm * 2 * Math.PI) / 60) : rolling;
+          const cur = wb.body.getAngularVelocity();
+          wb.body.setAngularVelocity(cur + (spin - cur) * 0.3);
+        }
+        // brake output: holds the machine in place
+        if (this.logicCtx.brake === 1) {
+          const root = side.phys.rootBody!;
+          const v = root.getLinearVelocity();
+          root.setLinearVelocity({ x: v.x * Math.max(0, 1 - 10 * dt), y: v.y });
+          for (const wheel of side.phys.wheels) {
+            const wb2 = side.phys.bodies.get(wheel.partId);
+            if (wb2 && !wb2.destroyed) wb2.body.setAngularVelocity(0);
+          }
         }
         // track units: direct linear force along the chassis facing
         for (const track of side.phys.tracks) {
@@ -785,12 +816,12 @@ export class Simulation {
       // control: any living controller part
       const control = side.bp.parts.some((p) => alive.has(p.id) && (part(p.def).cpu ?? 0) >= 8);
 
-      // mobility: a living wheel still weld-connected to its living drive motor,
+      // mobility: a living wheel driveshaft-coupled to a living motor,
       // or a living track unit (self-motorised)
       let mobility = false;
       for (const w of side.phys.wheels) {
         if (!alive.has(w.partId) || !w.motorPartId || !alive.has(w.motorPartId)) continue;
-        if (this.weldConnected(side, w.partId, w.motorPartId)) { mobility = true; break; }
+        if (this.shaftConnected(side, w.partId)) { mobility = true; break; }
       }
       if (!mobility) {
         mobility = side.phys.tracks.some((t) => alive.has(t.partId));
@@ -828,6 +859,11 @@ export class Simulation {
     }
   }
 
+}
+
+function aliveContains(rt: RobotSide, partId: string): boolean {
+  const pb = rt.phys.bodies.get(partId);
+  return !!pb && !pb.destroyed;
 }
 
 function hasWeaponParts(side: RobotSide): boolean {

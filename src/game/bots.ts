@@ -20,6 +20,9 @@ function wire(aPart: PlacedPart, aPort: number, bPart: PlacedPart, bPort: number
 function node(type: string, x: number, y: number, params: Record<string, string | number> = {}): LogicNode {
   return { id: uid("n"), type, x, y, params, in: {} };
 }
+function shaftW(motor: PlacedPart, mPort: number, wheel: PlacedPart, wPort: number): Wire {
+  return { id: uid("s"), a: { part: motor.id, port: mPort }, b: { part: wheel.id, port: wPort }, kind: "shaft" };
+}
 function base(parts: PlacedPart[], wires: Wire[], logic: LogicNode[], name: string): Blueprint {
   return { version: 2, id: uid("bp"), name, parts, wires, logic };
 }
@@ -64,8 +67,10 @@ export const SCOUT: BotSpec = {
     // wiring: battery -> everything
     wires.push(wire(bat, 0, cpu, 0));
     wires.push(wire(bat, 0, m1, 0));
-    wires.push(wire(m1, 2, m2, 0));
+    wires.push(wire(m1, 1, m2, 0));
     wires.push(wire(bat, 0, enc, 0));
+    wires.push(shaftW(m1, 2, w1, 0));
+    wires.push(shaftW(m2, 2, w2, 0));
     // drive logic
     driveLogic(logic, [m1.id, m2.id], "scout");
     return base(parts, wires, logic, "SCOUT MK-I");
@@ -153,8 +158,10 @@ export const BERSERKER: BotSpec = {
     wires.push(wire(bat, 0, cpu, 0));
     wires.push(wire(bat, 0, spinMotor, 0));
     wires.push(wire(bat, 0, m1, 0));
-    wires.push(wire(m1, 2, m2, 0));
+    wires.push(wire(m1, 1, m2, 0));
     wires.push(wire(bat, 0, prox, 0));
+    wires.push(shaftW(m1, 2, w1, 0));
+    wires.push(shaftW(m2, 2, w2, 0));
     // logic: spinner always on + charge forward
     const one = node("constant", 0, 0, { value: 1 });
     const spin = node("weapon_fire", 2, 0, { part: disc.id });
@@ -207,8 +214,10 @@ export const ARTILLERY: BotSpec = {
     wires.push(wire(bat, 0, bearing, 0));
     wires.push(wire(bat, 0, rail, 0));
     wires.push(wire(bat, 0, m1, 0));
-    wires.push(wire(m1, 2, m2, 0));
+    wires.push(wire(m1, 1, m2, 0));
     wires.push(wire(gen, 0, cam, 0));
+    wires.push(shaftW(m1, 2, w1, 0));
+    wires.push(shaftW(m2, 2, w2, 0));
     // logic: keep distance 16-26, auto-aim, fire
     driveLogic(logic, [m1.id, m2.id], "arty");
     const rangeS = node("sensor_value", 0, 4, { part: cam.id + "#range" });
@@ -266,6 +275,7 @@ export const EXPERIMENTAL: BotSpec = {
     wires.push(wire(comp, 0, tank, 0));
     wires.push(wire(tank, 0, piston, 0));
     wires.push(wire(bat, 0, m, 0));
+    wires.push(shaftW(m, 2, w, 0));
     // logic: timer pumps the piston (hop), drive forward
     const timer = node("timer", 0, 0, { on: 0.4, off: 1.4 });
     const pOut = node("servo_target", 2, 0, { part: piston.id });
