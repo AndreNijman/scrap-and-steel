@@ -4,7 +4,7 @@
 // when the action happened. No walls of text.
 
 import type { Blueprint } from "./blueprint";
-import { computeAdjacency, wiredToPower, robotStats } from "./blueprint";
+import { wiredToPower, robotStats } from "./blueprint";
 import { part } from "./parts";
 
 export interface TutorialCheckArgs {
@@ -31,19 +31,6 @@ function shaftedWheelsAdd(set: Set<string>, a: string, b: string) {
   set.add(b);
 }
 
-export function wheelHasMotor(bp: Blueprint, wheelId: string): boolean {
-  // wheel must touch a motor through adjacency (one edge)
-  for (const a of computeAdjacency(bp)) {
-    if (a.a === wheelId) {
-      if (part(bp.parts.find((p) => p.id === a.b)?.def ?? "").motor) return true;
-    }
-    if (a.b === wheelId) {
-      if (part(bp.parts.find((p) => p.id === a.a)?.def ?? "").motor) return true;
-    }
-  }
-  return false;
-}
-
 export const TUTORIAL_STEPS: TutorialStep[] = [
   {
     id: "frame",
@@ -66,7 +53,8 @@ export const TUTORIAL_STEPS: TutorialStep[] = [
     hint: "MOTION tab: Compact Motor",
     check: ({ bp }) => {
       const wheels = bp.parts.filter((p) => part(p.def).wheel);
-      return wheels.length > 0 && wheels.every((w) => wheelHasMotor(bp, w.id));
+      const motors = bp.parts.filter((p) => part(p.def).motor);
+      return wheels.length > 0 && motors.length > 0;
     },
   },
   {
