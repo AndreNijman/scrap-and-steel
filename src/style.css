@@ -131,8 +131,16 @@ button:hover { border-color: var(--accent); }
 #selected-card { width: 250px; flex-shrink: 0; }
 #sel-body { padding: 8px 9px; font-size: 10px; line-height: 1.6; color: var(--text); overflow-y: auto; height: calc(100% - 26px); }
 #sel-body .spec-k { color: var(--dim); }
-#logic-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; }
-#logic-head { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--edge); background: var(--panel3); }
+#logic-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; position: relative; }
+#logic-head { display: flex; align-items: center; gap: 6px; padding: 3px 8px; border-bottom: 1px solid var(--edge); background: var(--panel3); flex-wrap: wrap; }
+#logic-views { display: flex; gap: 3px; }
+#logic-views button { font-size: 9px; padding: 3px 7px; }
+#logic-views button.active { border-color: var(--accent); color: var(--accent2); }
+#btn-convert { align-self: center; }
+#python-area { flex: 1; background: #141a20; color: var(--text); border: none; outline: none; resize: none; font-size: 12px; line-height: 1.6; padding: 10px 12px; }
+#python-err { padding: 5px 9px; color: var(--bad); border-top: 1px solid var(--edge); font-size: 10px; }
+#bottom-resize { height: 5px; cursor: ns-resize; background: var(--edge); }
+#bottom-resize:hover { background: var(--accent); }
 #logic-head .panel-title { border: none; background: none; padding: 4px 0; }
 #logic-cats { display: flex; gap: 3px; flex: 1; }
 #logic-cats button { font-size: 9px; padding: 3px 7px; }

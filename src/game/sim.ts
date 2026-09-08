@@ -11,6 +11,7 @@ import { buildRobotWorld, makeProjectile, destroyPartBody, type RobotPhysics } f
 import { buildArenaWorld, type ArenaDef } from "./arena";
 import { createNet, solveNet, stepFuses, type PowerNet } from "./electric";
 import { createLogicRuntime, evalLogic, type LogicRuntime, type LogicContext } from "./logic";
+import { compilePython, type PythonApi } from "./python";
 
 export const TICK = 1 / 60;
 
@@ -41,6 +42,10 @@ export interface RobotSide {
   motorTemps: Map<string, number>;
   lastResult: { mobility: boolean; offense: boolean; control: boolean };
   totalMassKg: () => number;
+  pyStore: Map<string, number>;
+  pyPid: Map<string, { integ: number; lastErr: number }>;
+  pyFn: ((api: PythonApi) => void) | null;
+  pySrc: string | null;
   capBufferKJ: number;
   railCharge: number;
   adjacency: Map<string, string[]> | null;
@@ -127,6 +132,7 @@ export class Simulation {
         heat: new Map(), ammo: new Map(), weaponCooldown: new Map(), motorTemps: new Map(),
         lastResult: { mobility: false, offense: false, control: false },
         totalMassKg,
+        pyStore: new Map(), pyPid: new Map(), pyFn: null, pySrc: null,
         capBufferKJ: 0, railCharge: 0, adjacency: null,
       };
       for (const p of bp.parts) {
@@ -474,11 +480,53 @@ export class Simulation {
       forward: side.input.forward, back: side.input.back,
       fire: side.input.fire, aux: side.input.aux, turret: side.input.turret,
     };
-    // sensor readings routed through extended reader (radar #bearing/#range)
-    const rawRead = this.logicCtx.readSensor;
-    this.logicCtx.readSensor = (partId: string) => this.readSensorExtended(partId);
-    evalLogic(side.bp.logic, side.logic, this.logicCtx, dt);
-    this.logicCtx.readSensor = rawRead;
+    this.logicCtx.motorPowers.clear();
+    this.logicCtx.servoTargets.clear();
+    this.logicCtx.weaponFire.clear();
+    this.logicCtx.brake = 0;
+    if ((side.bp.logicMode ?? "nodes") === "python" && side.bp.python) {
+      // python program: recompile when the source changes
+      if (side.pySrc !== side.bp.python) {
+        side.pySrc = side.bp.python;
+        side.pyFn = compilePython(side.bp.python).fn ?? null;
+      }
+      if (side.pyFn) {
+        const api: PythonApi = {
+          forward: () => side.input.forward,
+          back: () => side.input.back,
+          fire: () => side.input.fire,
+          aux: () => side.input.aux,
+          turret: () => side.input.turret,
+          sensor: (partId: string) => this.readSensorExtended(partId),
+          motor: (partId: string, v: number) => { if (Number.isFinite(v)) this.logicCtx.motorPowers.set(partId, Math.max(-1, Math.min(1, v))); },
+          servo: (partId: string, deg: number) => { if (Number.isFinite(deg)) this.logicCtx.servoTargets.set(partId, deg); },
+          weapon: (partId: string, v: number) => { if (v) this.logicCtx.weaponFire.set(partId, 1); },
+          brake: (v: number) => { this.logicCtx.brake = v ? 1 : 0; },
+          clamp: (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v)),
+          abs: Math.abs,
+          min: (...vs: number[]) => Math.min(...vs),
+          max: (...vs: number[]) => Math.max(...vs),
+          pid: (key: string, target: number, value: number, kp: number, ki: number, kd: number) => {
+            let st = side.pyPid.get(key);
+            if (!st) { st = { integ: 0, lastErr: 0 }; side.pyPid.set(key, st); }
+            const err = target - value;
+            st.integ = Math.max(-10, Math.min(10, st.integ + err * dt));
+            const deriv = (err - st.lastErr) / Math.max(dt, 1e-6);
+            st.lastErr = err;
+            return Math.max(-1, Math.min(1, kp * err + ki * st.integ + kd * deriv));
+          },
+          remember: (k: string, v: number) => { side.pyStore.set(k, v); },
+          recall: (k: string, fallback: number) => side.pyStore.get(k) ?? fallback,
+        };
+        try { side.pyFn(api); } catch { /* a bad program never kills the sim */ }
+      }
+    } else {
+      // node graph
+      const rawRead = this.logicCtx.readSensor;
+      this.logicCtx.readSensor = (partId: string) => this.readSensorExtended(partId);
+      evalLogic(side.bp.logic, side.logic, this.logicCtx, dt);
+      this.logicCtx.readSensor = rawRead;
+    }
     this.lastMotorPowers = new Map(this.logicCtx.motorPowers);
 
     // ---------- power demands ----------

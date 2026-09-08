@@ -13,6 +13,7 @@ import { WorldRenderer } from "./render/draw";
 import { LogicEditor, targetOptions, NODE_DEFS } from "./ui/logicEditor";
 import { initAudio, sfx, updateDriveSound, updateWeaponSound, stopLoops } from "./audio/sfx";
 import { TUTORIAL_STEPS, loadTutorialState, persistDismissed, checkStep, type TutorialState, type TutorialCheckArgs } from "./game/tutorial";
+import { compilePython, nodesToPython, PYTHON_DOCS } from "./game/python";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -63,6 +64,7 @@ function boot() {
   $("lab-ver").textContent = "v1.0";
   bindMenu();
   bindGameUi();
+  bindLogicPanel();
   initAudioOnGesture();
   checkRelay();
   requestAnimationFrame(frame);
@@ -211,7 +213,8 @@ function enterWorkshop() {
   $("btn-lock").classList.add("hidden");
   $("lobby-bar").classList.add("hidden");
   refreshPanels();
-  if (tutorial.active && !tutorial.done) renderTutorial();
+  setLogicView(bp.logicMode ?? "nodes");
+  renderTutorial();
 }
 
 function setMode(m: Mode) {
@@ -346,6 +349,22 @@ function bindGameUi() {
     $("result-overlay").classList.add("hidden");
     enterWorkshop();
   };
+
+  // view toggle: nodes vs python
+  const viewBtns = $("logic-views");
+  const mkViewBtn = (label: string, m: "nodes" | "python") => {
+    const b = document.createElement("button");
+    b.textContent = label;
+    b.className = m === "nodes" ? "active" : "";
+    b.onclick = () => {
+      setLogicView(m);
+      for (const v of viewBtns.querySelectorAll("button")) v.classList.toggle("active", v.dataset.mode === m);
+    };
+    b.dataset.mode = m;
+    viewBtns.appendChild(b);
+  };
+  mkViewBtn("NODES", "nodes");
+  mkViewBtn("PYTHON", "python");
 
   // logic node picker: category button opens a dropdown of that category's node types
   const cats = $("logic-cats");
@@ -1102,6 +1121,100 @@ function renderLogicProps(nodeId: string | null) {
 }
 
 // ==========================================================================
+// logic views (nodes | python) + bottom-row resize
+
+let logicView: "nodes" | "python" = "nodes";
+
+function setLogicView(m: "nodes" | "python") {
+  logicView = m;
+  bp.logicMode = m;
+  const host = $("logic-canvas-host");
+  const ta = $("python-area") as HTMLTextAreaElement;
+  if (m === "python") {
+    host.classList.add("hidden");
+    ta.classList.remove("hidden");
+    if (!ta.value) ta.value = bp.python ?? "";
+  } else {
+    ta.classList.add("hidden");
+    host.classList.remove("hidden");
+    logicEditor?.resize();
+  }
+  renderLogicHeader();
+}
+
+function renderLogicHeader() {
+  const views = $("logic-views");
+  for (const v of views.querySelectorAll("button")) v.classList.toggle("active", v.dataset.mode === logicView);
+  const el = $("logic-props");
+  if (logicView === "python") {
+    const res = compilePython(bp.python ?? "");
+    const err = res.ok ? '<span style="color:var(--good)">program OK</span>' : `<span style="color:var(--bad)">${res.error}</span>`;
+    el.innerHTML = err + " · outputs run every tick";
+    el.classList.remove("hidden");
+    return;
+  }
+  const n = bp.logic.length;
+  el.innerHTML = `<span style="color:var(--dim)">${n} node(s)</span>`;
+  el.classList.remove("hidden");
+}
+
+function convertNodesToPython() {
+  const py = nodesToPython(bp.logic);
+  bp.python = py;
+  bp.logicMode = "python";
+  setLogicView("python");
+  const ta = $("python-area") as HTMLTextAreaElement;
+  ta.value = py;
+  saveBlueprintDebounced();
+}
+
+function bindLogicPanel() {
+  const ta = $("python-area") as HTMLTextAreaElement;
+  ta.title = PYTHON_DOCS;
+  ta.addEventListener("input", () => {
+    bp.python = ta.value;
+    bp.logicMode = "python";
+    renderLogicHeader();
+    let err: string | null = null;
+    try {
+      const res = compilePython(bp.python ?? "");
+      err = res.ok ? null : res.error ?? "?";
+    } catch (e) { err = String(e); }
+    if (err) { $("python-err").textContent = err; $("python-err").classList.remove("hidden"); }
+    else $("python-err").classList.add("hidden");
+  });
+  $("btn-convert").onclick = () => convertNodesToPython();
+
+  // bottom-row resize handle
+  const handle = $("bottom-resize");
+  let startY = 0;
+  let startH = 0;
+  let dragging = false;
+  handle.addEventListener("pointerdown", (e) => {
+    dragging = true;
+    startY = e.clientY;
+    startH = $("bottom-row").getBoundingClientRect().height;
+    handle.setPointerCapture(e.pointerId);
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const h = Math.max(140, Math.min(window.innerHeight * 0.75, startH - (e.clientY - startY)));
+    $("bottom-row").style.height = `${h}px`;
+    logicEditor?.resize();
+    localStorage.setItem("scrap_bottom_h", String(Math.round(h)));
+  });
+  handle.addEventListener("pointerup", () => { dragging = false; });
+  const saved = parseInt(localStorage.getItem("scrap_bottom_h") ?? "", 10);
+  if (Number.isFinite(saved)) $("bottom-row").style.height = `${saved}px`;
+}
+
+let saveTimer: number | null = null;
+function saveBlueprintDebounced() {
+  if (saveTimer) window.clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => saveBlueprint(bp), 800);
+}
+
+// ==========================================================================
 // tutorial
 
 function runTutorialCheck() {
@@ -1547,6 +1660,12 @@ Object.defineProperty(window as unknown as { __zoom: number }, "__zoom", { get: 
   }),
   bp: () => bp,
   addNode: (type: string) => logicEditor?.addNode(type),
+  setState: (patch: { logicMode?: "nodes" | "python"; python?: string }) => {
+    if (patch.python !== undefined) bp.python = patch.python;
+    if (patch.logicMode) { bp.logicMode = patch.logicMode; setLogicView(patch.logicMode); }
+    rebuildBuilder();
+    refreshPanels();
+  },
   pick: (clientX: number, clientY: number) => {
     const e = { clientX, clientY } as PointerEvent;
     return screenToCell(e);

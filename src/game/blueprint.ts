@@ -26,6 +26,8 @@ export interface Wire {
 import type { LogicNode } from "./logic";
 export type { LogicNode };
 
+export type LogicMode = "nodes" | "python";
+
 export interface Blueprint {
   version: 2;
   id: string;
@@ -33,6 +35,9 @@ export interface Blueprint {
   parts: PlacedPart[];
   wires: Wire[];
   logic: LogicNode[];
+  /** python program; runs instead of the node graph when logicMode is "python" */
+  python?: string;
+  logicMode?: LogicMode;
 }
 
 let counter = 0;
@@ -54,6 +59,7 @@ export function migrateBlueprint(raw: unknown): Blueprint | null {
   const bp = raw as Record<string, unknown>;
   if (bp.version === 2 && Array.isArray(bp.parts) && Array.isArray(bp.wires) && Array.isArray(bp.logic)) {
     const out = bp as unknown as Blueprint;
+    if (out.logicMode !== "python") out.logicMode = "nodes";
     // migration: pre-driveshaft saves coupled motors to wheels by adjacency.
     // Give every motor-adjacent wheel an explicit shaft wire so old saves
     // keep driving.

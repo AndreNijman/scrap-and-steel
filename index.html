@@ -114,6 +114,7 @@
         </div>
       </div>
 
+      <div id="bottom-resize" title="drag to resize"></div>
       <div id="bottom-row">
         <div id="help-card" class="panel">
           <div class="panel-title">CONTROLS</div>
@@ -125,12 +126,15 @@
         </div>
         <div id="logic-panel" class="panel">
           <div id="logic-head">
-            <div class="panel-title">LOGIC CIRCUIT</div>
+            <div class="panel-title">LOGIC CIRCUIT <span id="logic-views"></span></div>
+          <button id="btn-convert" class="tbtn small hidden" title="Convert node graph to python">CONVERT NODES → PY</button>
             <div id="logic-cats"></div>
             <button id="logic-del" class="tbtn small" title="Delete selected node">🗑</button>
           </div>
           <div id="logic-canvas-host"></div>
-          <div id="logic-props" class="mono hidden"></div>
+          <textarea id="python-area" class="mono hidden" spellcheck="false"></textarea>
+          <div id="python-err" class="mono hidden"></div>
+          <div id="logic-props" class="mono"></div>
         </div>
       </div>
 

@@ -24,6 +24,8 @@ interface DragState {
 }
 
 export class LogicEditor {
+  mode: "nodes" | "python" = "nodes";
+  pythonArea: HTMLTextAreaElement | null = null;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   scrollX = 20;
