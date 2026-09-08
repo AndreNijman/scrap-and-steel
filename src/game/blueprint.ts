@@ -229,6 +229,29 @@ export function portWorldPos(bp: Blueprint, partId: string, portIdx: number): { 
 
 export interface ChecklistItem { ok: boolean; warn: boolean; text: string }
 
+/** Parts with no edge contact to any other part (or disconnected from the first part). */
+export function floatingParts(bp: Blueprint): PlacedPart[] {
+  if (bp.parts.length === 0) return [];
+  const adj = computeAdjacency(bp);
+  const adjMap = new Map<string, string[]>();
+  for (const a of adj) {
+    if (!adjMap.has(a.a)) adjMap.set(a.a, []);
+    if (!adjMap.has(a.b)) adjMap.set(a.b, []);
+    adjMap.get(a.a)!.push(a.b);
+    adjMap.get(a.b)!.push(a.a);
+  }
+  // an isolated part (touches nothing) or any part disconnected from the first
+  const isolated = new Set<string>();
+  for (const p of bp.parts) if (!(adjMap.get(p.id)?.length)) isolated.add(p.id);
+  const seen = new Set<string>([bp.parts[0]!.id]);
+  const q: string[] = [bp.parts[0]!.id];
+  while (q.length) {
+    const cur = q.shift()!;
+    for (const n of adjMap.get(cur) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
+  }
+  return bp.parts.filter((p) => isolated.has(p.id) || !seen.has(p.id));
+}
+
 export function preflight(bp: Blueprint, maxMass: number): ChecklistItem[] {
   const items: ChecklistItem[] = [];
   const st = robotStats(bp);
@@ -251,8 +274,14 @@ export function preflight(bp: Blueprint, maxMass: number): ChecklistItem[] {
       for (const n of adjMap.get(cur) ?? []) if (!seen.has(n)) { seen.add(n); q.push(n); }
     }
   }
-  const floating = bp.parts.filter((p) => !seen.has(p.id)).length;
-  items.push({ ok: floating === 0, warn: false, text: floating === 0 ? "Structural integrity — all parts attached" : `${floating} floating part(s) not attached to the chassis` });
+  const floating = floatingParts(bp);
+  items.push({
+    ok: floating.length === 0,
+    warn: false,
+    text: floating.length === 0
+      ? "Structural integrity: all parts attached"
+      : `Not attached to the chassis: ${floating.slice(0, 3).map((p) => part(p.def).name).join(", ")}${floating.length > 3 ? ` and ${floating.length - 3} more` : ""} — move each one so an edge touches the machine`,
+  });
 
   const hasSource = bp.parts.some((p) => part(p.def).source);
   items.push({ ok: hasSource, warn: false, text: hasSource ? "Power system installed" : "No power source — add a battery or generator" });

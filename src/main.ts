@@ -861,7 +861,7 @@ function refreshPanels() {
 
   const hasCpu = st.cpuProvided >= st.cpuUsed;
   $("robot-info").innerHTML = `
-    <div class="kv"><span class="k">WEIGHT</span><span class="v">${Math.round(st.mass)} / ${maxMass} kg</span></div>
+    <div class="kv"><span class="k">WEIGHT</span><span class="v">${Math.round(st.mass)} kg${Number.isFinite(maxMass) ? ` / ${maxMass}` : " (sandbox)"}</span></div>
     <div class="kv"><span class="k">POWER</span><span class="v">${st.genWatts} / ${st.genWatts + 2000} W</span></div>
     <div class="kv"><span class="k">ENERGY CAP.</span><span class="v">${(st.energyKJ / 1000).toFixed(1)} MJ</span></div>
     <div class="kv"><span class="k">PARTS</span><span class="v">${st.parts}</span></div>
@@ -1215,6 +1215,16 @@ function frameBody(now: number) {
     // player inputs (bot battles + test mode): side 0 is the player
     if (mode === "test" && battleKind !== "online" && sim.robots[0] && !sim.robots[0].defeated) {
       sim.robots[0].input = { forward: input.forward, back: input.back, fire: input.fire, aux: input.aux, turret: input.turret };
+    }
+    // tutorial: track whether the player actually moved the machine
+    if (mode === "test" && tutorial.active) {
+      if (tutorial.spawnX === null) {
+        const p = sim.robots[0]?.phys.rootBody?.getPosition();
+        if (p) { tutorial.spawnX = p.x; tutorial.spawnZ = p.y; }
+      } else {
+        const p = sim.robots[0]?.phys.rootBody?.getPosition();
+        if (p && tutorial.spawnX !== null && tutorial.spawnZ !== null && Math.hypot(p.x - tutorial.spawnX, p.y - tutorial.spawnZ) > 0.8) tutorial.playerMoved = true;
+      }
     }
 
     // online: send inputs, apply remote

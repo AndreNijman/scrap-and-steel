@@ -287,41 +287,28 @@ export class WorldRenderer {
     }
   }
 
-  private drawPartStatic(ctx: CanvasRenderingContext2D, p: import("../game/blueprint").PlacedPart, tx: (m: number) => number, ty: (m: number) => number, z: number, selected?: boolean, hover?: boolean, ghost?: { valid: boolean }) {
+  private drawPartStatic(ctx: CanvasRenderingContext2D, p: import("../game/blueprint").PlacedPart, tx: (m: number) => number, ty: (m: number) => number, z: number) {
     const d = part(p.def);
     const r = partRect(p);
-    const x = tx(r.x * CELL);
-    const y = ty(r.y * CELL);
     const wPx = r.w * CELL * z;
     const hPx = r.h * CELL * z;
     const sprite = getSprite(p.def, d.w, d.h);
+    if (isCircularSprite(p.def)) {
+      // circles draw centered on the footprint's center (matches physics)
+      ctx.save();
+      ctx.translate(tx((r.x + r.w / 2) * CELL), ty((r.y + r.h / 2) * CELL));
+      const dia = (d.wheel ? d.wheel.radius * 2 : d.w * CELL) * z;
+      ctx.drawImage(sprite, -dia / 2, -dia / 2, dia, dia);
+      ctx.restore();
+      return;
+    }
     ctx.save();
-    ctx.translate(x, y);
+    ctx.translate(tx(r.x * CELL), ty(r.y * CELL));
     if (p.rot === 2) ctx.scale(-1, 1);
     if (p.rot === 1) { ctx.rotate(Math.PI / 2); ctx.translate(0, -wPx); }
     else if (p.rot === 3) { ctx.rotate(-Math.PI / 2); ctx.translate(-hPx, 0); }
-    if (isCircularSprite(p.def)) {
-      // circular sprites are drawn at their physics diameter
-      const dia = (d.wheel ? d.wheel.radius * 2 : d.w * CELL) * z;
-      ctx.drawImage(sprite, -dia / 2, -dia / 2, dia, dia);
-    } else {
-      ctx.drawImage(sprite, 0, 0, wPx, hPx);
-    }
+    ctx.drawImage(sprite, 0, 0, wPx, hPx);
     ctx.restore();
-    if (selected || hover) {
-      ctx.strokeStyle = selected ? "#ffd866" : "rgba(120,200,255,0.6)";
-      ctx.lineWidth = 2;
-      ctx.strokeRect(x - 2, y - 2, wPx + 4, hPx + 4);
-    }
-    if (ghost) {
-      ctx.globalAlpha = 0.45;
-      ctx.restore();
-      ctx.save();
-      ctx.globalAlpha = 0.45;
-      ctx.fillStyle = ghost.valid ? "#5fbf5f" : "#c05038";
-      ctx.fillRect(x, y, wPx, hPx);
-      ctx.globalAlpha = 1;
-    }
   }
 
 
