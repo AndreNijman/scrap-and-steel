@@ -491,16 +491,35 @@ export class Simulation {
         side.pyFn = compilePython(side.bp.python).fn ?? null;
       }
       if (side.pyFn) {
+        const resolvePartId = (rawId: string): string => {
+          if (alive.has(rawId)) return rawId;
+          for (const p of side.bp.parts) {
+            if (p.id === rawId) return p.id;
+          }
+          for (const p of side.bp.parts) {
+            if (p.id.endsWith(rawId)) return p.id;
+          }
+          return rawId;
+        };
+        const resolveSensorKey = (rawKey: string): string => {
+          const hashIdx = rawKey.indexOf("#");
+          if (hashIdx >= 0) {
+            const baseId = rawKey.slice(0, hashIdx);
+            const tag = rawKey.slice(hashIdx);
+            return `${resolvePartId(baseId)}${tag}`;
+          }
+          return resolvePartId(rawKey);
+        };
         const api: PythonApi = {
           forward: () => side.input.forward,
           back: () => side.input.back,
           fire: () => side.input.fire,
           aux: () => side.input.aux,
           turret: () => side.input.turret,
-          sensor: (partId: string) => this.readSensorExtended(partId),
-          motor: (partId: string, v: number) => { if (Number.isFinite(v)) this.logicCtx.motorPowers.set(partId, Math.max(-1, Math.min(1, v))); },
-          servo: (partId: string, deg: number) => { if (Number.isFinite(deg)) this.logicCtx.servoTargets.set(partId, deg); },
-          weapon: (partId: string, v: number) => { if (v) this.logicCtx.weaponFire.set(partId, 1); },
+          sensor: (partId: string) => this.readSensorExtended(resolveSensorKey(partId)),
+          motor: (partId: string, v: number) => { if (Number.isFinite(v)) this.logicCtx.motorPowers.set(resolvePartId(partId), Math.max(-1, Math.min(1, v))); },
+          servo: (partId: string, deg: number) => { if (Number.isFinite(deg)) this.logicCtx.servoTargets.set(resolvePartId(partId), deg); },
+          weapon: (partId: string, v: number) => { if (v) this.logicCtx.weaponFire.set(resolvePartId(partId), 1); },
           brake: (v: number) => { this.logicCtx.brake = v ? 1 : 0; },
           clamp: (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v)),
           abs: Math.abs,

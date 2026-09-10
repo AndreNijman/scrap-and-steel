@@ -45,6 +45,28 @@ try {
   await waitUntil(() => !document.getElementById("screen-game").classList.contains("hidden"), 5000, "workshop");
   ok("workshop visible");
 
+  // in-game documentation access mid-building
+  await page.click("#btn-docs");
+  await waitUntil(() => !document.getElementById("modal").classList.contains("hidden"), 3000, "docs modal open");
+  ok("docs modal opened via workshop topbar button");
+
+  await page.click('.docs-tab[data-tab="python"]');
+  const pyText = await page.evaluate(() => document.getElementById("docs-tab-content")?.textContent ?? "");
+  if (!pyText.includes("PYTHON SCRIPTING MODE") || !pyText.includes("BUILT-IN ROBOT API")) {
+    throw new Error("python documentation tab missing expected content");
+  }
+  ok("python documentation tab verified");
+
+  await page.click("#docs-close-btn");
+  await waitUntil(() => document.getElementById("modal").classList.contains("hidden"), 3000, "docs modal closed");
+  ok("docs modal closed");
+
+  await page.click("#btn-logic-docs");
+  await waitUntil(() => !document.getElementById("modal").classList.contains("hidden"), 3000, "logic docs modal open");
+  await page.click("#docs-done-btn");
+  await waitUntil(() => document.getElementById("modal").classList.contains("hidden"), 3000, "logic docs modal closed");
+  ok("logic panel docs button verified");
+
   // place parts through the UI: motion -> wheel
   await page.click('#bin-tabs button[data-cat="motion"]');
   await page.waitForTimeout(200);

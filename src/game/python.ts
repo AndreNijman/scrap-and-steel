@@ -114,26 +114,54 @@ export function compilePython(source: string): PythonCompileResult {
     const knownVars = new Set<string>();
     const declared = new Set<string>();
     const out: string[] = [];
-    const emitBlock = (startIdx: number, indent: number): number => {
+    const emitStatements = (startIdx: number, parentIndent: number): number => {
       let i = startIdx;
+      if (parentIndent >= 0) {
+        if (i >= lines.length || lines[i]!.indent <= parentIndent) {
+          throw new CompileError(`expected an indented block at line ${i < lines.length ? i + 1 : i}`);
+        }
+      }
+      const blockIndent = parentIndent >= 0 ? lines[i]!.indent : 0;
       while (i < lines.length) {
         const line = lines[i]!;
-        if (line.indent < indent) break;
-        if (line.indent > indent) throw new CompileError(`unexpected indent at line ${i + 1}`);
+        if (line.indent < blockIndent) break;
+        if (line.indent > blockIndent) throw new CompileError(`unexpected indent at line ${i + 1}`);
         const text = line.text;
-        // block openers
+
+        // if statement starts a chain
         const ifM = text.match(/^if\s+(.+):$/);
-        const elifM = text.match(/^elif\s+(.+):$/);
-        const elseM = text.match(/^else:$/);
-        if (ifM || elifM || elseM) {
-          if (ifM) {
-            out.push(`${i ? "" : ""}if (${transpileExpr(ifM[1]!, knownVars)}) {`);
-          } else {
-            out.push("} " + (elifM ? `else if (${transpileExpr(elifM[1]!, knownVars)}) {` : "else {"));
+        if (ifM) {
+          out.push(`if (${transpileExpr(ifM[1]!, knownVars)}) {`);
+          i = emitStatements(i + 1, blockIndent);
+          out.push("}");
+          // check for following elif / else at the same blockIndent
+          while (i < lines.length && lines[i]!.indent === blockIndent) {
+            const nextText = lines[i]!.text;
+            const elifM = nextText.match(/^elif\s+(.+):$/);
+            const elseM = nextText.match(/^else:$/);
+            if (elifM) {
+              out.push(`else if (${transpileExpr(elifM[1]!, knownVars)}) {`);
+              i = emitStatements(i + 1, blockIndent);
+              out.push("}");
+              continue;
+            }
+            if (elseM) {
+              out.push("else {");
+              i = emitStatements(i + 1, blockIndent);
+              out.push("}");
+              break;
+            }
+            break;
           }
-          i = emitBlock(i + 1, indent + 1);
           continue;
         }
+
+        const elifM = text.match(/^elif\s+(.+):$/);
+        const elseM = text.match(/^else:$/);
+        if (elifM || elseM) {
+          throw new CompileError(`unexpected ${elifM ? "elif" : "else"} without matching if at line ${i + 1}`);
+        }
+
         // assignment
         const assign = text.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
         if (assign) {
@@ -146,50 +174,20 @@ export function compilePython(source: string): PythonCompileResult {
           i++;
           continue;
         }
+
         // bare call
         if (/^[a-zA-Z_]\w*\(.*\)$/.test(text) || BUILTINS.has(text.replace(/\(.*/, ""))) {
           out.push(`${transpileExpr(text, knownVars)};`);
           i++;
           continue;
         }
+
         throw new CompileError(`cannot parse: ${text}`);
       }
-      out.push("}");
       return i;
     };
-    // wrap top-level in a block
-    let i = 0;
-    let guard = 0;
-    while (i < lines.length && guard++ < 500) {
-      const line = lines[i]!;
-      const text = line.text;
-      const ifM = text.match(/^if\s+(.+):$/);
-      const elifM = text.match(/^elif\s+(.+):$/);
-      const elseM = text.match(/^else:$/);
-      if (ifM || elifM || elseM) {
-        if (ifM) out.push(`if (${transpileExpr(ifM[1]!, knownVars)}) {`);
-        else out.push("} " + (elifM ? `else if (${transpileExpr(elifM[1]!, knownVars)}) {` : "else {"));
-        i = emitBlock(i + 1, line.indent + 1);
-        continue;
-      }
-      const assign = text.match(/^([a-zA-Z_]\w*)\s*=\s*(.+)$/);
-      if (assign) {
-        const name = assign[1]!;
-        if (BUILTINS.has(name)) throw new CompileError(`"${name}" is a built-in name`);
-        const kw = declared.has(name) ? "" : "let ";
-        declared.add(name);
-        knownVars.add(name);
-        out.push(`${kw}${name} = ${transpileExpr(assign[2]!, knownVars)};`);
-        i++;
-        continue;
-      }
-      if (BUILTINS.has(text.replace(/\(.*/, "")) || /^[a-zA-Z_]\w*\(.*\)$/.test(text)) {
-        out.push(`${transpileExpr(text, knownVars)};`);
-        i++;
-        continue;
-      }
-      throw new CompileError(`cannot parse: ${text}`);
-    }
+
+    emitStatements(0, -1);
     const body = out.join("\n");
     // eslint-disable-next-line no-new-func
     const fn = new Function("__api", `"use strict";\nconst api = __api;\n${body}\n`) as (api: PythonApi) => void;

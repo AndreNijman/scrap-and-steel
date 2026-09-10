@@ -45,6 +45,7 @@
         <div class="tb-actions">
           <button id="btn-test" class="tbtn accent" title="Switch between BUILD and TEST (T)">▶ TEST</button>
           <button id="btn-diag" class="tbtn" title="Diagnostic overlays (D)">◐ DIAG</button>
+          <button id="btn-docs" class="tbtn" title="Manual, Nodes & Python Docs (H)">DOCS</button>
           <button id="btn-save" class="tbtn" title="Save blueprint">SAVE</button>
           <button id="btn-load" class="tbtn" title="Load blueprint">LOAD</button>
           <button id="btn-export" class="tbtn" title="Export blueprint string">⇪</button>
@@ -118,7 +119,8 @@
       <div id="bottom-row">
         <div id="help-card" class="panel">
           <div class="panel-title">CONTROLS</div>
-          <div class="mono" id="help-body">DRAG: PLACE<br>RIGHT CLICK: REMOVE<br>R: ROTATE<br>C / V: COPY / PASTE<br>WIRE MODE: CLICK TWO PORTS<br>T: TEST · D: DIAGNOSTICS</div>
+          <div class="mono" id="help-body">DRAG: PLACE<br>RIGHT CLICK: REMOVE<br>R: ROTATE<br>C / V: COPY / PASTE<br>WIRE MODE: CLICK TWO PORTS<br>T: TEST · D: DIAG · H: DOCS</div>
+          <button id="btn-help-open" class="tbtn small" style="margin-top:6px;width:100%;font-size:9px">MANUAL &amp; DOCS</button>
         </div>
         <div id="selected-card" class="panel">
           <div class="panel-title" id="sel-title">COMPONENT</div>
@@ -127,7 +129,8 @@
         <div id="logic-panel" class="panel">
           <div id="logic-head">
             <div class="panel-title">LOGIC CIRCUIT <span id="logic-views"></span></div>
-          <button id="btn-convert" class="tbtn small hidden" title="Convert node graph to python">CONVERT NODES → PY</button>
+            <button id="btn-convert" class="tbtn small hidden" title="Convert node graph to python">CONVERT NODES → PY</button>
+            <button id="btn-logic-docs" class="tbtn small" title="Python &amp; Nodes Reference">? DOCS</button>
             <div id="logic-cats"></div>
             <button id="logic-del" class="tbtn small" title="Delete selected node">🗑</button>
           </div>

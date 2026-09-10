@@ -182,6 +182,27 @@ button:hover { border-color: var(--accent); }
 .modal-box input, .modal-box select { font-family: var(--mono); background: var(--bg); color: var(--text); border: 1px solid var(--edge2); padding: 6px 8px; }
 .modal-box .row { display: flex; gap: 10px; margin-top: 14px; }
 .bp-textarea { width: 100%; height: 120px; font-family: var(--mono); font-size: 10px; background: var(--bg); color: var(--text); border: 1px solid var(--edge2); margin: 8px 0; }
+.modal-box.modal-wide { max-width: 860px; width: 94vw; }
+.docs-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.docs-header h3 { margin: 0; }
+.docs-close-x { font-size: 16px; background: none; border: none; color: var(--dim); cursor: pointer; padding: 2px 8px; }
+.docs-close-x:hover { color: var(--text); }
+.docs-tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--edge2); margin-bottom: 14px; padding-bottom: 8px; flex-wrap: wrap; }
+.docs-tab { font-family: var(--display); font-size: 11px; letter-spacing: 0.1em; background: var(--bg); border: 1px solid var(--edge); color: var(--dim); padding: 5px 12px; cursor: pointer; }
+.docs-tab:hover { color: var(--text); border-color: var(--edge2); }
+.docs-tab.active { color: var(--accent2); border-color: var(--accent); background: rgba(217, 164, 65, 0.1); font-weight: 600; }
+.docs-body { font-size: 11px; line-height: 1.6; max-height: 60vh; overflow-y: auto; padding-right: 6px; }
+.docs-section { margin-bottom: 18px; }
+.docs-section h4 { font-family: var(--display); color: var(--accent2); letter-spacing: 0.1em; font-size: 12px; margin: 10px 0 6px; border-bottom: 1px dashed var(--edge); padding-bottom: 3px; }
+.docs-table { width: 100%; border-collapse: collapse; margin: 8px 0 12px; font-size: 11px; }
+.docs-table th, .docs-table td { border: 1px solid var(--edge2); padding: 4px 7px; text-align: left; vertical-align: top; }
+.docs-table th { background: rgba(255, 255, 255, 0.04); color: var(--accent); font-family: var(--display); font-weight: 600; font-size: 10px; letter-spacing: 0.08em; }
+.docs-table code, .docs-code { font-family: var(--mono); background: var(--bg); border: 1px solid var(--edge); color: #8cdcfe; }
+.docs-table code { padding: 1px 4px; font-size: 10px; }
+.docs-code { display: block; padding: 8px 10px; margin: 6px 0; font-size: 11px; line-height: 1.5; white-space: pre; overflow-x: auto; color: #a5d6ff; }
+.docs-copy-btn { font-size: 10px; padding: 2px 8px; margin-top: 4px; background: var(--panel2); border: 1px solid var(--edge); color: var(--dim); cursor: pointer; }
+.docs-copy-btn:hover { color: var(--accent); border-color: var(--accent); }
+.docs-callout { background: rgba(217, 164, 65, 0.06); border-left: 3px solid var(--accent); padding: 8px 12px; margin: 8px 0; font-size: 11px; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--edge2); }

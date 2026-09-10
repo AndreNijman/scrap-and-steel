@@ -14,6 +14,7 @@ import { LogicEditor, targetOptions, NODE_DEFS } from "./ui/logicEditor";
 import { initAudio, sfx, updateDriveSound, updateWeaponSound, stopLoops } from "./audio/sfx";
 import { TUTORIAL_STEPS, loadTutorialState, persistDismissed, checkStep, type TutorialState, type TutorialCheckArgs } from "./game/tutorial";
 import { compilePython, nodesToPython, PYTHON_DOCS } from "./game/python";
+import { openDocsModal, closeDocsModal, type DocsTab } from "./ui/docsModal";
 
 const $ = (id: string) => document.getElementById(id)!;
 
@@ -165,20 +166,13 @@ function bindMenu() {
   setInterval(() => { if (screen === "menu") drawMenuBg(); }, 2000);
 }
 
+function openDocs(tab: DocsTab = "manual") {
+  sfx.uiClick();
+  openDocsModal(tab, undefined, () => toast("COPIED CODE SNIPPET"));
+}
+
 function showHelp() {
-  openModal(`
-    <h3>FIELD MANUAL</h3>
-    <ul>
-      <li><b>BUILD:</b> pick a category, click parts, drag them onto the grid. R rotates, right-click removes, C/V copies and pastes.</li>
-      <li><b>WIRE:</b> switch to WIRE mode. Click a port (small circles on part edges), then click another port. Batteries OUTPUT power; motors, weapons and sensors have INPUT ports. Motor S ports take DRIVESHAFTS to wheels. No wire, no power. No driveshaft, no drive.</li>
-      <li><b>LOGIC:</b> the bottom panel is your robot's brain. Add INPUT nodes (keys, sensors), MATH/LOGIC nodes, and OUTPUT nodes bound to specific motors and weapons. A starter drive: INPUT FORWARD − INPUT REVERSE → MOTOR POWER.</li>
-      <li><b>TEST:</b> press TEST. Physics run. Drive with W/S, fire with SPACE, aux with SHIFT, turret Q/E. Break it, learn, press TEST again to rebuild instantly.</li>
-      <li><b>DIAG:</b> diagnostic mode shows wire current flow and lets you click any component for live readouts.</li>
-      <li><b>BATTLE:</b> a robot is disabled when it loses its controller, its mobility AND its weapons, or its will to run (3 s). Battery empty ≠ dead.</li>
-    </ul>
-    <div class="row"><button class="btn-primary" id="modal-close">UNDERSTOOD</button></div>
-  `);
-  $("modal-close").onclick = closeModal;
+  openDocs("manual");
 }
 
 function promptJoin() {
@@ -199,7 +193,11 @@ function openModal(html: string) {
   $("modal-content").innerHTML = html;
   $("modal").classList.remove("hidden");
 }
-function closeModal() { $("modal").classList.add("hidden"); }
+function closeModal() {
+  closeDocsModal();
+  $("modal").classList.add("hidden");
+  $("modal-content").className = "modal-box";
+}
 
 // =========================================================================
 // workshop
@@ -329,6 +327,8 @@ function bindGameUi() {
     renderer.showPowerFlow = diagMode;
     $("btn-diag").classList.toggle("active", diagMode);
   };
+  $("btn-docs").onclick = () => openDocs("manual");
+  $("btn-help-open").onclick = () => openDocs("manual");
   $("btn-save").onclick = () => doSave();
   $("btn-load").onclick = () => doLoad();
   $("btn-export").onclick = () => doExport();
@@ -428,8 +428,11 @@ function bindGameUi() {
       if (e.code === "Digit1") setTool("place");
       if (e.code === "Digit2") setTool("select");
       if (e.code === "Digit3") setTool("wire");
-      if (e.code === "Digit4") setTool("delete");
-      if (e.code === "Escape") { builder.wireFrom = null; builder.multiSelection.clear(); }
+      if (e.code === "Escape") {
+        if (!$("modal").classList.contains("hidden")) { closeModal(); return; }
+        builder.wireFrom = null; builder.multiSelection.clear();
+      }
+      if (e.code === "KeyH") { openDocs("manual"); return; }
     }
   });
   window.addEventListener("keyup", (e) => keys.delete(e.code));
@@ -1001,7 +1004,14 @@ function refreshSelectedPanel() {
   if (!p) { $("sel-title").textContent = "COMPONENT"; $("sel-body").innerHTML = "Click a part to inspect it."; return; }
   const d = part(p.def);
   $("sel-title").textContent = d.name.toUpperCase();
-  $("sel-body").innerHTML = selectedPartSpec(p.def) + `<div style="margin-top:6px;color:var(--dim)">ID ${p.id.slice(-4)} · grid (${p.x},${p.y})</div>`;
+  $("sel-body").innerHTML = selectedPartSpec(p.def) + `<div style="margin-top:6px;color:var(--dim)">ID <span id="sel-copy-id" title="Click to copy ID for Python / logic" style="color:var(--accent2);cursor:pointer;text-decoration:underline dotted">${p.id}</span> · grid (${p.x},${p.y})</div>`;
+  const copyEl = $("sel-copy-id");
+  if (copyEl) {
+    copyEl.onclick = () => {
+      navigator.clipboard?.writeText(p.id);
+      toast("COPIED ID: " + p.id);
+    };
+  }
 }
 
 function refreshDiagPanel() {
@@ -1130,12 +1140,15 @@ function setLogicView(m: "nodes" | "python") {
   bp.logicMode = m;
   const host = $("logic-canvas-host");
   const ta = $("python-area") as HTMLTextAreaElement;
+  const btnConvert = $("btn-convert");
   if (m === "python") {
     host.classList.add("hidden");
     ta.classList.remove("hidden");
+    btnConvert?.classList.remove("hidden");
     if (!ta.value) ta.value = bp.python ?? "";
   } else {
     ta.classList.add("hidden");
+    btnConvert?.classList.add("hidden");
     host.classList.remove("hidden");
     logicEditor?.resize();
   }
@@ -1184,6 +1197,7 @@ function bindLogicPanel() {
     else $("python-err").classList.add("hidden");
   });
   $("btn-convert").onclick = () => convertNodesToPython();
+  $("btn-logic-docs").onclick = () => openDocs(logicView === "python" ? "python" : "nodes");
 
   // bottom-row resize handle
   const handle = $("bottom-resize");

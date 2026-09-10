@@ -92,6 +92,7 @@ above are only key names.
 ## Docs
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Logic and Python Programming](docs/LOGIC_AND_PYTHON.md)
 - [Testing and release gates](docs/TESTING.md)
 - [Deployment](docs/DEPLOYMENT.md)
 
