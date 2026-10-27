@@ -18,7 +18,7 @@ export default defineConfig({
     port: 5180,
   },
   test: {
-    // runs against wrangler dev: node tests/latency/rooms.test.mjs
-    exclude: [...configDefaults.exclude, "tests/latency/rooms.test.mjs"],
+    // run against wrangler dev: node tests/latency/rooms.test.mjs, node tests/devjoin/relay.test.mjs
+    exclude: [...configDefaults.exclude, "tests/latency/rooms.test.mjs", "tests/devjoin/relay.test.mjs"],
   },
 });
