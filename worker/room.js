@@ -9,9 +9,18 @@
 // there, its "shard" `<code>~<shard>`, and sends both players a ticket to
 // reconnect with. Later joiners to the old code are sent on to the shard
 // until it empties. A moved room never moves again.
+//
+// Dev join (netdev.js): a join with a valid dev pass is never refused. With a
+// free seat the dev takes it like anyone; in a full room the dev spectates:
+// the room sends them the match start (seed, both blueprints, arena) and
+// every input_frame of both players, plus the inputs so far when they arrive
+// mid-match, so their client runs its own copy of the match. A spectator
+// takes the first seat that frees up outside countdown and combat. Everyone
+// in the room gets {t:'dev-joined', name}.
 
 import { NetStats, sendNetLog, coloOf } from "./netstats.js";
 import { REGIONS, whereOf, chooseRegion, newShard, shardRegion, roomStub, regionOfColo } from "./netplace.js";
+import { verifyDevPass } from "./netdev.js";
 
 const PROTOCOL_VERSION = 1;
 const BUILD_GRACE_SEC = 30;
@@ -21,6 +30,9 @@ const STATE_KEY = "room";
 const ADOPT_WAIT_MS = 6000; // a moved room starts with whoever reconnected by then
 const MOVE_CLOSE_MS = 1000; // old sockets close this long after `move`
 const PING_HEADERS = { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" };
+const DEV_HOST = "scrap.andrenijman.com"; // the host dev passes are issued for
+const SPEC_LOG_MAX = 50_000; // input changes kept for a spectator joining mid-match
+const SPEC_LOG_CHUNK = 2000; // input changes per spectate_log message
 
 function enc(t, payload) {
   return JSON.stringify({ v: PROTOCOL_VERSION, t, payload });
@@ -80,6 +92,12 @@ export class Room {
     this.colo = "";
     this.rtts = new Map(); // token -> last five reported pings, for placement (in memory only)
     this.moving = false; // a hand-off to a shard is in flight
+    // This match's input changes, [slot, tick, throttle, steer, fire, lift],
+    // for spectators joining mid-match (in memory only: null if the object
+    // restarted since the countdown, and the log is then incomplete).
+    this.inputLog = null;
+    this.lastInput = ["", ""];
+    this.inputTicks = [0, 0];
   }
 
   // ---------- state persistence ----------
@@ -138,12 +156,27 @@ export class Room {
     return -1;
   }
 
-  /** Send to every accepted socket; skips the given slot. Works across hibernation. */
+  /** A dev watching the room (no seat). */
+  isSpectator(ws) {
+    try {
+      return !!ws.deserializeAttachment()?.spectator;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Spectator sockets, longest waiting first. */
+  spectators() {
+    return this.state.getWebSockets("spectator").filter((ws) => this.isSpectator(ws))
+      .sort((a, b) => (a.deserializeAttachment().at || 0) - (b.deserializeAttachment().at || 0));
+  }
+
+  /** Send to every accepted socket, spectators included; skips the given slot. Works across hibernation. */
   broadcast(t, payload, exceptSlot = -1) {
     const msg = enc(t, payload);
     for (const ws of this.state.getWebSockets()) {
       const slot = this.slotOf(ws);
-      if (slot === -1 || slot === exceptSlot) continue;
+      if (slot === -1 ? !this.isSpectator(ws) : slot === exceptSlot) continue;
       try {
         ws.send(msg);
       } catch {
@@ -161,6 +194,19 @@ export class Room {
         } catch {
           // ignore
         }
+      }
+    }
+  }
+
+  /** netdev.js's standard announcement, to every player and spectator (the dev included). */
+  announceDev(name) {
+    const msg = JSON.stringify({ t: "dev-joined", name });
+    for (const ws of this.state.getWebSockets()) {
+      if (this.slotOf(ws) === -1 && !this.isSpectator(ws)) continue;
+      try {
+        ws.send(msg);
+      } catch {
+        // ignore
       }
     }
   }
@@ -236,8 +282,10 @@ export class Room {
         this.s.code = code;
         await this.save();
       }
+      // a dev pass from the join's query (relay.js); invalid or missing = the normal rules
+      const dev = await verifyDevPass(url.searchParams.get("dev") || "", DEV_HOST, { publicKey: this.env?.DEV_TEST_PUBLIC_KEY || undefined });
       const pair = new WebSocketPair();
-      const joined = await this.handleJoin(pair[1], name, isCreate, rt, whereOf(request), ticket);
+      const joined = await this.handleJoin(pair[1], name, isCreate, rt, whereOf(request), ticket, dev);
       if (!joined) {
         return new Response(JSON.stringify({ error: "room full", code: "room_full" }), {
           status: 409,
@@ -268,10 +316,12 @@ export class Room {
   /**
    * `where` is netplace.js's { country, edge } for the player, when known.
    * `ticket` is a seat in a moved room, given out by the room's old object.
+   * `dev` is a verified dev pass's { name }: never refused, spectates when full.
    * @param {{ country: string, edge: string } | null} [where]
    * @param {string} [ticket]
+   * @param {{ name: string } | null} [dev]
    */
-  async handleJoin(ws, name, isCreate, reconnectToken, where = null, ticket = "") {
+  async handleJoin(ws, name, isCreate, reconnectToken, where = null, ticket = "", dev = null) {
     // a ticket back into a moved room's seat, else reconnect by token
     const adoption = this.s.adoption;
     let idx = -1;
@@ -304,12 +354,24 @@ export class Room {
     }
 
     const free = this.s.slots.findIndex((s) => s === null);
-    if (free === -1) return false;
+    if (free === -1) {
+      if (!dev) return false;
+      await this.spectate(ws, dev.name, where);
+      this.announceDev(dev.name);
+      return true;
+    }
+    this.state.acceptWebSocket(ws, ["room"]);
+    await this.seat(ws, free, dev ? dev.name : name, where);
+    if (dev) this.announceDev(dev.name);
+    return true;
+  }
+
+  /** Give an accepted socket the free seat `free`: a new player there. */
+  async seat(ws, free, name, where) {
     const token = crypto.randomUUID();
     this.s.slots[free] = { name, token, ready: false, locked: false, connected: true, bpHash: null, where };
     this.net?.seat(token, name, where);
     await this.save();
-    this.state.acceptWebSocket(ws, ["room"]);
     ws.serializeAttachment({ slot: free });
 
     this.sendTo(free, "welcome", { slot: free, reconnectToken: token, host: free === 0, state: this.lobbyStatePayload(), region: this.region() });
@@ -322,7 +384,73 @@ export class Room {
     } else if (this.s.phase === "combat" || this.s.phase === "countdown") {
       await this.sendMatchState(free, true);
     }
-    return true;
+  }
+
+  // ---------- spectators (devs in a full room) ----------
+
+  async spectate(ws, name, where) {
+    this.state.acceptWebSocket(ws, ["spectator"]);
+    ws.serializeAttachment({ slot: -1, spectator: true, name, where, at: Date.now() });
+    ws.send(enc("spectate", { state: this.lobbyStatePayload(), region: this.region() }));
+    if (this.s.phase === "build") {
+      ws.send(enc("build_start", { deadline: this.s.buildDeadline, settings: this.s.settings }));
+    } else if (this.s.phase === "combat" || this.s.phase === "countdown") {
+      await this.sendSpectatorMatch(ws);
+    }
+  }
+
+  // The match so far, for a spectator joining mid-match: its start (as for
+  // a player) and every input change since, then live input_frames follow.
+  async sendSpectatorMatch(ws) {
+    ws.send(enc("match_countdown", {
+      seed: this.s.matchSeed,
+      authority: this.s.authority,
+      blueprints: [(await this.state.storage.get("slotbp0")) ?? null, (await this.state.storage.get("slotbp1")) ?? null],
+      arena: this.s.settings.arena,
+      combatLimitSec: this.s.settings.combatLimitSec,
+      startAt: this.s.combatStartAt || Date.now(),
+      resume: true,
+      spectate: true,
+    }));
+    const log = this.inputLog ?? [];
+    for (let i = 0; i === 0 || i < log.length; i += SPEC_LOG_CHUNK) {
+      const done = i + SPEC_LOG_CHUNK >= log.length;
+      ws.send(enc("spectate_log", {
+        entries: log.slice(i, i + SPEC_LOG_CHUNK),
+        done,
+        ticks: done ? this.inputTicks : undefined,
+        complete: this.inputLog !== null && this.inputLog.length < SPEC_LOG_MAX,
+      }));
+    }
+  }
+
+  // Seat waiting spectators in free seats, between matches (lobby, build, result).
+  async seatSpectators() {
+    if (this.s.adoption || this.s.moved || this.moving || !["lobby", "build", "result"].includes(this.s.phase)) return;
+    for (const ws of this.spectators()) {
+      const free = this.s.slots.findIndex((s) => s === null);
+      if (free === -1) return;
+      const att = ws.deserializeAttachment();
+      await this.seat(ws, free, att.name || "Player", att.where || null);
+    }
+  }
+
+  spectatorMessage(ws, message) {
+    let msg;
+    try {
+      if (typeof message !== "string" || message.length > 4096) return;
+      msg = JSON.parse(message);
+    } catch {
+      return;
+    }
+    // spectators only ping (not in the lag log); everything else is a player's
+    if (msg?.v !== PROTOCOL_VERSION || msg.t !== "ping") return;
+    const p = msg.payload ?? {};
+    try {
+      ws.send(enc("pong", { t: p.t, c: typeof p.c === "number" ? p.c : undefined }));
+    } catch {
+      // gone
+    }
   }
 
   async sendMatchState(slot, resume) {
@@ -346,7 +474,8 @@ export class Room {
     await this.restore();
     const slot = this.slotOf(ws);
     if (slot === -1) {
-      if (ws.deserializeAttachment()?.moved) try { ws.close(4000, "moved"); } catch { /* gone */ }
+      if (this.isSpectator(ws)) this.spectatorMessage(ws, message);
+      else if (ws.deserializeAttachment()?.moved) try { ws.close(4000, "moved"); } catch { /* gone */ }
       return;
     }
     const s = this.s.slots[slot];
@@ -423,7 +552,9 @@ export class Room {
         if (this.s.phase !== "combat") return;
         if (typeof p.tick !== "number") return;
         this.net?.message(s.token);
-        this.sendTo(1 - slot, "input_frame", { slot, ...pickInput(p) });
+        const frame = { slot, ...pickInput(p) };
+        this.sendTo(1 - slot, "input_frame", frame);
+        this.logInput(frame);
         return;
       }
 
@@ -453,6 +584,22 @@ export class Room {
         // unknown message types are ignored safely
         return;
     }
+  }
+
+  // A spectator's copy of the match: every change of a player's input, and
+  // each player's latest tick; live frames go to spectators as they come.
+  logInput(f) {
+    const spectators = this.spectators();
+    if (spectators.length) {
+      const msg = enc("input_frame", f);
+      for (const ws of spectators) try { ws.send(msg); } catch { /* gone */ }
+    }
+    if (f.slot !== 0 && f.slot !== 1) return;
+    this.inputTicks[f.slot] = Math.max(this.inputTicks[f.slot], f.tick);
+    const key = `${f.throttle},${f.steer},${f.fire ? 1 : 0},${f.lift ? 1 : 0}`;
+    if (!this.inputLog || key === this.lastInput[f.slot] || this.inputLog.length >= SPEC_LOG_MAX) return;
+    this.lastInput[f.slot] = key;
+    this.inputLog.push([f.slot, f.tick, f.throttle, f.steer, f.fire ? 1 : 0, f.lift ? 1 : 0]);
   }
 
   // ---------- phase machine ----------
@@ -507,6 +654,9 @@ export class Room {
     this.s.authority = 0; // deterministic room policy in v1
     this.s.combatStartAt = Date.now() + 3000;
     await this.save();
+    this.inputLog = [];
+    this.lastInput = ["", ""];
+    this.inputTicks = [0, 0];
     const payload = {
       seed: this.s.matchSeed,
       authority: this.s.authority,
@@ -569,6 +719,7 @@ export class Room {
             await this.save();
             this.broadcast("lobby_state", this.lobbyStatePayload());
             this.ensureRegistryUpdate();
+            await this.seatSpectators();
             if (this.s.slots.every((x) => !x)) await this.cleanup();
           }
         }
@@ -671,8 +822,9 @@ export class Room {
       const sockets = [];
       for (const ws of this.state.getWebSockets()) {
         const slot = this.slotOf(ws);
-        if (slot === -1) continue;
-        try { ws.send(enc("move", { shard, region: choice.region, ticket: ticketOf[slot] })); } catch { /* gone */ }
+        if (slot === -1 && !this.isSpectator(ws)) continue;
+        // a spectator follows without a ticket and joins the shard as a dev again
+        try { ws.send(enc("move", slot === -1 ? { shard, region: choice.region } : { shard, region: choice.region, ticket: ticketOf[slot] })); } catch { /* gone */ }
         ws.serializeAttachment({ slot: -1 }); // its close is no longer a disconnect here
         sockets.push(ws);
       }
@@ -721,6 +873,7 @@ export class Room {
     this.s.adoption = null;
     for (let i = 0; i < 2; i++) if (this.s.slots[i] && !this.s.slots[i].connected) this.s.slots[i] = null;
     await this.save();
+    await this.seatSpectators();
     if (this.s.slots.every((x) => !x)) {
       await this.cleanup();
       return;

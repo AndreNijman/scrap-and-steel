@@ -5,8 +5,9 @@
 // The Room DO is a validated relay + match authority — it never runs 60 Hz physics.
 //
 //   GET /ping?room=<code>[&shard=<shard>] - where that room runs, { colo, region }
-//   websocket /ws?code=<code>[&shard=<shard>&ticket=<t>] - that room, or its
-//                moved copy (a shard, see room.js)
+//   websocket /ws?code=<code>[&shard=<shard>&ticket=<t>&dev=<pass>] - that room,
+//                or its moved copy (a shard, see room.js); `dev` is a dev pass
+//                (netdev.js), checked by the room
 // Internal routes between room objects (/_adopt, /_released) are never forwarded.
 
 import { LobbyRegistry } from "./registry.js";
@@ -96,6 +97,8 @@ export default {
       // a moved room's shard, and this player's seat there (room.js)
       const shard = create ? "" : u.get("shard") || "";
       const ticket = (u.get("ticket") || "").replace(/[^a-z0-9]/g, "").slice(0, 16);
+      // the join is this query string, so a dev's pass comes with it (room.js verifies it)
+      const dev = (u.get("dev") || "").slice(0, 600);
       if (shard && !shardRegion(shard)) return json({ error: "bad shard", code: "bad_room" }, 400);
 
       let roomCode = code;
@@ -119,7 +122,7 @@ export default {
       const stub = roomStub(env.ROOMS, roomCode, shard);
       const forwardUrl = new URL(request.url);
       forwardUrl.pathname = "/room";
-      forwardUrl.search = `?code=${roomCode}&name=${encodeURIComponent(name)}&create=${create ? 1 : 0}${reconnectToken ? `&rt=${encodeURIComponent(reconnectToken)}` : ""}${ticket ? `&ticket=${ticket}` : ""}`;
+      forwardUrl.search = `?code=${roomCode}&name=${encodeURIComponent(name)}&create=${create ? 1 : 0}${reconnectToken ? `&rt=${encodeURIComponent(reconnectToken)}` : ""}${ticket ? `&ticket=${ticket}` : ""}${dev ? `&dev=${encodeURIComponent(dev)}` : ""}`;
       return stub.fetch(forwardUrl.toString(), withWhere(request, where));
     }
 
