@@ -727,6 +727,7 @@ function handleRelay(t: string, payload: unknown) {
       setModeBuild();
       $("lobby-bar").classList.remove("hidden");
       $("btn-lock").classList.add("hidden");
+      $("btn-lobby-ready").classList.remove("hidden");
       $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: share the code, then READY`;
       refreshPanels();
       toast(relay?.movingTo ? `Room moved to ${regionLabel(relay.movingTo, 0)}` : `Connected as player ${mySlot + 1}`);
@@ -749,7 +750,7 @@ function handleRelay(t: string, payload: unknown) {
       setModeBuild();
       $("lobby-bar").classList.remove("hidden");
       $("btn-lock").classList.add("hidden");
-      ($("btn-lobby-ready") as HTMLButtonElement).disabled = true;
+      $("btn-lobby-ready").classList.add("hidden"); // nothing to ready up for without a seat
       showSpectating("the room is full");
       toast(relay?.movingTo ? `Room moved to ${regionLabel(relay.movingTo, 0)}` : "Spectating: you take the next free seat");
       setPlayer("Spectator", roomCode);
@@ -926,15 +927,17 @@ function spectatorInput(slot: number, tick: number, input: NetInputs) {
 }
 
 // Step the spectator's sim up to the tick both players' inputs have reached
-// (a player silent for a second stops holding it back): at 60 Hz once close,
-// as many ticks as fit in 20 ms of the frame while catching up.
+// (a player silent for a second stops holding it back, and with both silent
+// it follows the match clock): at 60 Hz once close, as many ticks as fit in
+// 20 ms of the frame while catching up.
 function stepSpectator(dt: number) {
   const outcome = () => sim?.outcome ?? null; // sim.step() sets it
   if (!sim || !spec || !spec.logDone || resultShown || outcome()) return;
   if (Date.now() < combatDeadline - lobbySettings.combatLimitSec * 1000) return; // countdown
   const now = Date.now();
   const live = [0, 1].filter((i) => now - spec!.heard[i]! < 1000);
-  const target = live.length ? Math.min(...live.map((i) => spec!.have[i]!)) : Math.max(...spec.have);
+  const clock = Math.floor((now - (combatDeadline - lobbySettings.combatLimitSec * 1000)) / (TICK * 1000)) - 30;
+  const target = live.length ? Math.min(...live.map((i) => spec!.have[i]!)) : Math.max(clock, ...spec.have);
   const catchUp = target - sim.tick > 30;
   const t0 = performance.now();
   spec.acc += dt;

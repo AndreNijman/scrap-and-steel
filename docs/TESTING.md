@@ -7,6 +7,8 @@ npm run check          # typecheck + all tests (minimum gate)
 node tools/smoke.mjs   # browser smoke (build first)
 node tools/mp-smoke.mjs [wsUrl]  # relay protocol smoke
 node tools/prod-e2e.mjs [siteUrl]  # two-browser online match on the live relay
+node tests/devjoin/relay.test.mjs  # dev join on wrangler dev
+node tests/devjoin/browser-smoke.mjs  # build first: a dev opens ?join=CODE mid-match in headless Chromium and spectates
 ```
 
 ## Test pyramid
