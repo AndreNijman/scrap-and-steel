@@ -3,15 +3,24 @@
 // persisted to DO storage and reloaded on wake; slot identity survives
 // hibernation via serializeAttachment; timers use storage.setAlarm (setTimeout
 // dies with the isolate and would silently kill rooms — the roadmap forbids it).
+//
+// When both players are ready, a room whose players are far apart may move to
+// a fairer region first (netplace.js): it hands the room to a fresh object
+// there, its "shard" `<code>~<shard>`, and sends both players a ticket to
+// reconnect with. Later joiners to the old code are sent on to the shard
+// until it empties. A moved room never moves again.
 
 import { NetStats, sendNetLog, coloOf } from "./netstats.js";
-import { whereOf } from "./netplace.js";
+import { REGIONS, whereOf, chooseRegion, newShard, shardRegion, roomStub, regionOfColo } from "./netplace.js";
 
 const PROTOCOL_VERSION = 1;
 const BUILD_GRACE_SEC = 30;
 const COMBAT_GRACE_SEC = 12;
 const MAX_BP_BYTES = 128 * 1024;
 const STATE_KEY = "room";
+const ADOPT_WAIT_MS = 6000; // a moved room starts with whoever reconnected by then
+const MOVE_CLOSE_MS = 1000; // old sockets close this long after `move`
+const PING_HEADERS = { "content-type": "application/json", "access-control-allow-origin": "*", "cache-control": "no-store" };
 
 function enc(t, payload) {
   return JSON.stringify({ v: PROTOCOL_VERSION, t, payload });
@@ -44,6 +53,23 @@ function sanitizeSettings(s) {
   return out;
 }
 
+// A player's netprobe.js results as sent ({ weur: 38, apac: 290 }), kept to known regions.
+function cleanProbes(ms) {
+  if (!ms || typeof ms !== "object") return null;
+  const out = {};
+  for (const region of REGIONS) {
+    const v = Number(ms[region]);
+    if (Number.isFinite(v) && v > 0 && v < 10000) out[region] = Math.round(v);
+  }
+  return Object.keys(out).length ? out : null;
+}
+
+const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : null);
+
+function newTicket() {
+  return [...crypto.getRandomValues(new Uint8Array(16))].map((b) => "abcdefghijklmnopqrstuvwxyz0123456789"[b % 36]).join("");
+}
+
 export class Room {
   constructor(state, env) {
     this.state = state;
@@ -52,6 +78,8 @@ export class Room {
     this.net = null; // lag stats for the match in progress (in memory only)
     this.netOutcomeSeen = false;
     this.colo = "";
+    this.rtts = new Map(); // token -> last five reported pings, for placement (in memory only)
+    this.moving = false; // a hand-off to a shard is in flight
   }
 
   // ---------- state persistence ----------
@@ -76,6 +104,13 @@ export class Room {
       rematchVotes: [],
       // slot meta (ws identity lives in attachments; bp stored under slotbp<i>)
       slots: [null, null],
+      // placement: in the old room once it moved, { shard, region }; in a
+      // shard, its name, the colo it moved from, and until the match starts
+      // the seats waiting for their tickets, { tickets: { ticket: slot }, until }
+      moved: null,
+      shard: "",
+      movedFrom: "",
+      adoption: null,
     };
   }
 
@@ -130,6 +165,15 @@ export class Room {
     }
   }
 
+  // Where this object runs (DEV_COLO fakes it under wrangler dev).
+  async locate() {
+    if (!this.colo) this.colo = this.env?.DEV_COLO || (await coloOf());
+  }
+
+  region() {
+    return shardRegion(this.s.shard) || regionOfColo(this.colo);
+  }
+
   lobbyStatePayload() {
     return {
       code: this.s.code,
@@ -168,17 +212,32 @@ export class Room {
   async fetch(request) {
     const url = new URL(request.url);
     await this.restore();
+    // From another room object (never reachable from outside: the Worker only
+    // forwards /ping and websocket upgrades to /room).
+    if (request.method === "POST" && url.pathname === "/_adopt") return this.adopt(await request.json());
+    if (request.method === "POST" && url.pathname === "/_released") {
+      await this.released((await request.json()).shard);
+      return new Response(null, { status: 204 });
+    }
+    // The room's ping target: where it runs, timed by the waiting room.
+    if (url.pathname === "/ping") {
+      await this.locate();
+      return new Response(JSON.stringify({ colo: this.colo, region: this.region() }), { headers: PING_HEADERS });
+    }
     if (url.pathname === "/room") {
       const code = url.searchParams.get("code") || "UNSET";
       const name = (url.searchParams.get("name") || "Player").slice(0, 24);
       const isCreate = url.searchParams.get("create") === "1";
       const rt = url.searchParams.get("rt");
+      const ticket = url.searchParams.get("ticket") || "";
+      await this.locate();
+      if (this.s.moved) return this.sendOnward();
       if (!this.s.code) {
         this.s.code = code;
         await this.save();
       }
       const pair = new WebSocketPair();
-      const joined = await this.handleJoin(pair[1], name, isCreate, rt, whereOf(request));
+      const joined = await this.handleJoin(pair[1], name, isCreate, rt, whereOf(request), ticket);
       if (!joined) {
         return new Response(JSON.stringify({ error: "room full", code: "room_full" }), {
           status: 409,
@@ -190,34 +249,55 @@ export class Room {
     return new Response("not found", { status: 404 });
   }
 
+  // The room moved: tell the player where; they join the shard as usual.
+  sendOnward() {
+    const pair = new WebSocketPair();
+    const ws = pair[1];
+    this.state.acceptWebSocket(ws, ["moved"]);
+    ws.serializeAttachment({ slot: -1 }); // not a player here: its messages and close are ignored
+    ws.send(enc("move", { shard: this.s.moved.shard, region: this.s.moved.region }));
+    setTimeout(() => { try { ws.close(4000, "moved"); } catch { /* gone */ } }, MOVE_CLOSE_MS);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
   // ---------- joins ----------
 
   /**
    * `where` is netplace.js's { country, edge } for the player, when known.
+   * `ticket` is a seat in a moved room, given out by the room's old object.
    * @param {{ country: string, edge: string } | null} [where]
+   * @param {string} [ticket]
    */
-  async handleJoin(ws, name, isCreate, reconnectToken, where = null) {
-    // reconnect by token
-    if (reconnectToken) {
-      const idx = this.s.slots.findIndex((s) => s && s.token === reconnectToken);
-      if (idx >= 0) {
-        this.state.acceptWebSocket(ws, ["room"]);
-        ws.serializeAttachment({ slot: idx });
-        this.s.slots[idx].connected = true;
-        this.s.slots[idx].disconnectedAt = 0;
-        if (where) this.s.slots[idx].where = where;
-        this.net?.reconnect(reconnectToken);
-        this.net?.seat(reconnectToken, this.s.slots[idx].name, where);
-        await this.save();
-        this.sendTo(idx, "welcome", { slot: idx, reconnectToken, state: this.lobbyStatePayload() });
-        this.broadcast("peer_reconnected", { slot: idx }, idx);
-        if (this.s.phase === "combat" || this.s.phase === "countdown") {
-          await this.sendMatchState(idx, true);
-        } else if (this.s.phase === "build") {
-          this.sendTo(idx, "build_start", { deadline: this.s.buildDeadline, settings: this.s.settings });
-        }
+  async handleJoin(ws, name, isCreate, reconnectToken, where = null, ticket = "") {
+    // a ticket back into a moved room's seat, else reconnect by token
+    const adoption = this.s.adoption;
+    let idx = -1;
+    if (ticket && adoption && adoption.tickets[ticket] !== undefined) idx = adoption.tickets[ticket];
+    else if (reconnectToken) idx = this.s.slots.findIndex((s) => s && s.token === reconnectToken);
+    if (idx >= 0 && this.s.slots[idx]) {
+      const token = this.s.slots[idx].token;
+      this.state.acceptWebSocket(ws, ["room"]);
+      ws.serializeAttachment({ slot: idx });
+      this.s.slots[idx].connected = true;
+      this.s.slots[idx].disconnectedAt = 0;
+      if (where) this.s.slots[idx].where = where;
+      this.net?.reconnect(token);
+      this.net?.seat(token, this.s.slots[idx].name, where);
+      if (adoption) for (const [t, i] of Object.entries(adoption.tickets)) if (i === idx) delete adoption.tickets[t];
+      await this.save();
+      this.sendTo(idx, "welcome", { slot: idx, reconnectToken: token, host: idx === 0, state: this.lobbyStatePayload(), region: this.region() });
+      if (adoption) {
+        this.broadcast("lobby_state", this.lobbyStatePayload());
+        if (!Object.keys(adoption.tickets).length) await this.adopted();
         return true;
       }
+      this.broadcast("peer_reconnected", { slot: idx }, idx);
+      if (this.s.phase === "combat" || this.s.phase === "countdown") {
+        await this.sendMatchState(idx, true);
+      } else if (this.s.phase === "build") {
+        this.sendTo(idx, "build_start", { deadline: this.s.buildDeadline, settings: this.s.settings });
+      }
+      return true;
     }
 
     const free = this.s.slots.findIndex((s) => s === null);
@@ -229,7 +309,7 @@ export class Room {
     this.state.acceptWebSocket(ws, ["room"]);
     ws.serializeAttachment({ slot: free });
 
-    this.sendTo(free, "welcome", { slot: free, reconnectToken: token, host: free === 0, state: this.lobbyStatePayload() });
+    this.sendTo(free, "welcome", { slot: free, reconnectToken: token, host: free === 0, state: this.lobbyStatePayload(), region: this.region() });
     this.broadcast("lobby_state", this.lobbyStatePayload());
     if (this.s.slots[1 - free]) this.sendTo(1 - free, "peer_joined", { slot: free, name });
     this.ensureRegistryUpdate();
@@ -277,10 +357,24 @@ export class Room {
     const p = msg.payload ?? {};
 
     switch (msg.t) {
-      case "ping":
+      case "ping": {
+        // the last five reported pings, for placement at match start
+        if (typeof p.rtt === "number" && p.rtt > 0 && p.rtt < 60000) {
+          const rtts = this.rtts.get(s.token) ?? [];
+          rtts.push(p.rtt);
+          if (rtts.length > 5) rtts.shift();
+          this.rtts.set(s.token, rtts);
+        }
         this.net?.ping(s.token, p.rtt, p.fps, p.frameMax);
         this.sendTo(slot, "pong", { t: p.t, c: typeof p.c === "number" ? p.c : undefined });
         return;
+      }
+
+      case "regions": {
+        s.probes = cleanProbes(p.ms);
+        await this.save();
+        return;
+      }
 
       case "set_settings": {
         if (slot !== 0 || this.s.phase !== "lobby") {
@@ -358,8 +452,12 @@ export class Room {
   // ---------- phase machine ----------
 
   async maybeStartBuild() {
-    if (this.s.phase !== "lobby") return;
-    if (this.s.slots[0]?.ready && this.s.slots[1]?.ready) await this.startBuildPhase();
+    if (this.s.phase !== "lobby" || this.moving) return;
+    if (!(this.s.slots[0]?.ready && this.s.slots[1]?.ready)) return;
+    // a new match may first move somewhere fairer; if the move fails it starts here
+    const choice = this.mayMove() ? chooseRegion(this.s.slots.map((s) => this.placeOf(s))) : null;
+    if (choice && (await this.moveRoom(choice))) return;
+    if (this.s.phase === "lobby" && this.s.slots[0]?.ready && this.s.slots[1]?.ready) await this.startBuildPhase();
   }
 
   async startBuildPhase() {
@@ -387,7 +485,8 @@ export class Room {
   async armDeadlineTimer() {
     // alarms are the only timers that survive hibernation
     let at = 0;
-    if (this.s.phase === "build") at = this.s.buildDeadline + 250;
+    if (this.s.adoption) at = this.s.adoption.until;
+    else if (this.s.phase === "build") at = this.s.buildDeadline + 250;
     else if (this.s.phase === "countdown") at = this.s.combatStartAt + 250;
     else if (this.s.phase === "combat") at = this.s.combatDeadline + 250;
     if (at > 0) this.state.storage.setAlarm(at);
@@ -432,6 +531,7 @@ export class Room {
   async alarm() {
     await this.restore();
     const now = Date.now();
+    if (this.s.adoption && now >= this.s.adoption.until) await this.adopted();
     if (this.s.phase === "build" && now >= this.s.buildDeadline) {
       // force-lock anyone who hasn't (empty blueprint counts as their build)
       for (const s of this.s.slots) {
@@ -486,14 +586,17 @@ export class Room {
     this.net = new NetStats();
     this.netOutcomeSeen = false;
     for (const s of this.s.slots) if (s) this.net.seat(s.token, s.name, s.where);
-    if (!this.colo) coloOf().then((colo) => { this.colo = colo; });
+    if (!this.colo) this.locate();
   }
 
   endNetLog(outcome) {
     const net = this.net;
     this.net = null;
     if (!net) return;
-    const record = net.record({ code: this.s.code, mode: `1v1 · ${this.s.settings.arena}`, outcome, colo: this.colo });
+    const record = net.record({
+      code: this.s.code, mode: `1v1 · ${this.s.settings.arena}`, outcome, colo: this.colo, region: this.region(),
+      moved: this.s.shard ? { from: this.s.movedFrom, to: shardRegion(this.s.shard) } : null,
+    });
     if (record.runTime < 10) return;
     sendNetLog(this.env, this.state, "scrap", record);
   }
@@ -502,6 +605,7 @@ export class Room {
     this.endNetLog("closed");
     this.s.phase = "lobby";
     await this.save();
+    if (this.s.shard) this.release();
     if (this.env.REGISTRY && this.s.code) {
       const regId = this.env.REGISTRY.idFromName("global");
       this.env.REGISTRY.get(regId)
@@ -511,6 +615,131 @@ export class Room {
         })
         .catch(() => {});
     }
+  }
+
+  // ---------- room placement ----------
+
+  // When both players are ready the room asks netplace.js's chooseRegion
+  // whether another region is clearly fairer. If so it hands the room to a
+  // shard there (/_adopt), gives each player a ticket for their seat, and
+  // remembers the move so later joiners follow. The shard starts the build
+  // phase once both tickets are back (or after ADOPT_WAIT_MS), and tells the
+  // old object when it empties (/_released).
+  mayMove() {
+    return !!(this.env?.ROOMS && this.s.code && !this.s.shard && !this.s.moved && this.s.slots.every((s) => s && s.connected));
+  }
+
+  placeOf(s) {
+    return { probes: s?.probes || null, rtt: median(this.rtts.get(s?.token) || []) };
+  }
+
+  async moveRoom(choice) {
+    this.moving = true;
+    try {
+      const code = this.s.code;
+      const shard = newShard(choice.region);
+      const tickets = {};
+      const ticketOf = [];
+      this.s.slots.forEach((s, i) => {
+        if (!s) return;
+        ticketOf[i] = newTicket();
+        tickets[ticketOf[i]] = { slot: i };
+      });
+      const state = {
+        settings: this.s.settings,
+        slots: this.s.slots.map((s) => s && { name: s.name, token: s.token, where: s.where || null, probes: s.probes || null }),
+      };
+      try {
+        const res = await roomStub(this.env.ROOMS, code, shard).fetch("https://room/_adopt", {
+          method: "POST",
+          body: JSON.stringify({ code, shard, from: this.colo, state, tickets }),
+        });
+        if (!res.ok) throw new Error(`adopt answered ${res.status}`);
+      } catch (e) {
+        console.error("room move failed, starting here", e);
+        return false;
+      }
+      this.s.moved = { shard, region: choice.region };
+      this.s.slots = [null, null];
+      await this.save();
+      const sockets = [];
+      for (const ws of this.state.getWebSockets()) {
+        const slot = this.slotOf(ws);
+        if (slot === -1) continue;
+        try { ws.send(enc("move", { shard, region: choice.region, ticket: ticketOf[slot] })); } catch { /* gone */ }
+        ws.serializeAttachment({ slot: -1 }); // its close is no longer a disconnect here
+        sockets.push(ws);
+      }
+      // Clients close these themselves on `move`; this is for one that doesn't.
+      // A plain timer is enough: nothing is lost if it dies with the isolate.
+      setTimeout(() => { for (const ws of sockets) try { ws.close(4000, "moved"); } catch { /* gone */ } }, MOVE_CLOSE_MS);
+      return true;
+    } finally {
+      this.moving = false;
+    }
+  }
+
+  // In the shard: take over the room, its seats waiting for their tickets.
+  async adopt({ code, shard, from, state, tickets }) {
+    if (!code || !shardRegion(shard) || !state || !tickets || this.s.adoption || this.s.slots.some(Boolean)) {
+      return new Response("cannot adopt", { status: 409 });
+    }
+    this.s = this.defaultState();
+    this.s.code = String(code);
+    this.s.shard = shard;
+    this.s.movedFrom = String(from || "");
+    this.s.settings = { ...this.s.settings, ...sanitizeSettings(state.settings || {}) };
+    this.s.slots = [0, 1].map((i) => {
+      const p = state.slots?.[i];
+      if (!p || typeof p.token !== "string") return null;
+      // both readied in the old room; connected once their ticket is back
+      return {
+        name: String(p.name || "Player").slice(0, 24), token: p.token, ready: true, locked: false,
+        connected: false, disconnectedAt: 0, bpHash: null, where: p.where || null, probes: p.probes || null,
+      };
+    });
+    const seats = {};
+    for (const [ticket, seat] of Object.entries(tickets)) if (this.s.slots[seat?.slot]) seats[ticket] = seat.slot;
+    this.s.adoption = { tickets: seats, until: Date.now() + ADOPT_WAIT_MS };
+    await this.save();
+    await this.armDeadlineTimer();
+    this.ensureRegistryUpdate();
+    return new Response(null, { status: 204 });
+  }
+
+  // Both tickets are back, or time is up: start with whoever is here. Seats
+  // nobody came back to are dropped, as after a disconnect's grace; a player
+  // left alone waits for an opponent as in any lobby.
+  async adopted() {
+    if (!this.s.adoption) return;
+    this.s.adoption = null;
+    for (let i = 0; i < 2; i++) if (this.s.slots[i] && !this.s.slots[i].connected) this.s.slots[i] = null;
+    await this.save();
+    if (this.s.slots.every((x) => !x)) {
+      await this.cleanup();
+      return;
+    }
+    if (this.s.slots[0] && this.s.slots[1]) {
+      await this.startBuildPhase();
+      return;
+    }
+    this.broadcast("lobby_state", this.lobbyStatePayload());
+    this.ensureRegistryUpdate();
+  }
+
+  // In the shard, once empty: the room's own code is free again.
+  release() {
+    if (!this.env?.ROOMS || !this.s.code) return;
+    const sent = roomStub(this.env.ROOMS, this.s.code)
+      .fetch("https://room/_released", { method: "POST", body: JSON.stringify({ shard: this.s.shard }) })
+      .catch((e) => console.error("room release failed", e));
+    this.state.waitUntil?.(sent);
+  }
+
+  async released(shard) {
+    if (!this.s.moved || this.s.moved.shard !== shard) return;
+    this.s.moved = null;
+    await this.save();
   }
 
   async webSocketError(ws) {

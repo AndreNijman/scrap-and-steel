@@ -9,6 +9,7 @@ import { Simulation, TICK, type BotDriver } from "./game/sim";
 import { ARENAS } from "./game/arena";
 import { BOT_SPECS, DriverBot, type BotSpec } from "./game/bots";
 import { RelayClient, packInputs, unpackInputs, resolveRelayUrl } from "./game/net";
+import { probeRegions, pingUrl, regionLabel } from "./game/netprobe.js";
 import { WorldRenderer } from "./render/draw";
 import { LogicEditor, targetOptions, NODE_DEFS } from "./ui/logicEditor";
 import { initAudio, sfx, updateDriveSound, updateWeaponSound, stopLoops } from "./audio/sfx";
@@ -53,6 +54,8 @@ let acc = 0;
 let resultShown = false;
 let remoteInputs = [{ forward: 0, back: 0, fire: 0, aux: 0, turret: 0 }, { forward: 0, back: 0, fire: 0, aux: 0, turret: 0 }];
 let powerHistory: number[] = [];
+let roomPingMs: number | null = null; // this player's ms to the room (waiting-room label)
+let hudPingTimer = 0;
 let tutorial: TutorialState = loadTutorialState();
 let cameraFollow = true;
 let toastTimer = 0;
@@ -69,6 +72,8 @@ function boot() {
   initAudioOnGesture();
   checkRelay();
   requestAnimationFrame(frame);
+  // re-time the room's ping now and then while the waiting room is up
+  setInterval(() => { if (!$("lobby-bar").classList.contains("hidden")) timeRoomPing(); }, 30_000);
   window.addEventListener("resize", resize);
   resize();
   showScreen("menu");
@@ -109,6 +114,7 @@ function maxMassFor(): number {
 }
 
 function checkRelay() {
+  probeRegions(); // this player's ping to each region, sent to the room on joining
   const el = $("menu-relay");
   fetch(`${resolveRelayUrl().replace(/^ws/, "http")}/health`, { signal: AbortSignal.timeout(4000) })
     .then((r) => {
@@ -696,9 +702,13 @@ function handleRelay(t: string, payload: unknown) {
       $("btn-lock").classList.add("hidden");
       $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: share the code, then READY`;
       refreshPanels();
-      toast(`Connected as player ${mySlot + 1}`);
+      toast(relay?.movingTo ? `Room moved to ${regionLabel(relay.movingTo, 0)}` : `Connected as player ${mySlot + 1}`);
+      roomPingMs = null;
+      showLobbyRegion();
+      timeRoomPing();
       break;
     }
+    case "move": toast(`Moving room to ${regionLabel(String(p.region ?? ""), 0)}…`); break;
     case "lobby_state": {
       const st = p as { players?: ({ ready: boolean } | null)[]; settings?: typeof lobbySettings };
       if (st.settings) lobbySettings = { ...lobbySettings, ...st.settings };
@@ -750,6 +760,38 @@ function handleRelay(t: string, payload: unknown) {
     case "error": toast(`Relay: ${p.message ?? p.code}`); break;
     default: break;
   }
+}
+
+// The room's region and this player's ms to it on the waiting-room bar,
+// "Asia · 120 ms". Timed with the relay's /ping, never per frame.
+function timeRoomPing() {
+  const r = relay;
+  if (!r?.roomCode || !r.region) return;
+  const url = `${r.url.replace(/^ws/, "http")}/ping?room=${encodeURIComponent(r.roomCode)}${r.shard ? `&shard=${encodeURIComponent(r.shard)}` : ""}`;
+  pingUrl(url).then((ms: number | null) => {
+    if (relay !== r) return;
+    roomPingMs = ms;
+    showLobbyRegion();
+  });
+}
+
+function showLobbyRegion() {
+  const el = $("lobby-region");
+  const label = relay?.region ? regionLabel(relay.region, roomPingMs ?? 0) : "";
+  el.textContent = label;
+  el.classList.toggle("hidden", !label);
+}
+
+// This player's live ping in the corner while an online match is on.
+function updateHudPing() {
+  const el = $("hud-ping");
+  const rtt = battleKind === "online" && relay?.pinger ? relay.pinger.rtt : -1;
+  const show = screen === "game" && rtt >= 0 && $("lobby-bar").classList.contains("hidden");
+  el.classList.toggle("hidden", !show);
+  if (!show) return;
+  el.textContent = `${rtt} ms`;
+  el.classList.toggle("warn", rtt >= 120 && rtt < 200);
+  el.classList.toggle("bad", rtt >= 200);
 }
 
 function startOnlineMatch(seed: number, startAt: number) {
@@ -1329,6 +1371,8 @@ function frameBody(now: number) {
   const dt = Math.min((now - lastFrame) / 1000, 0.1);
   lastFrame = now;
   if (toastTimer > 0) { toastTimer -= dt; if (toastTimer <= 0) $("toast").classList.add("hidden"); }
+  hudPingTimer += dt;
+  if (hudPingTimer >= 0.25) { hudPingTimer = 0; updateHudPing(); }
   if (screen === "menu") { drawMenuBg(); return; }
 
   // player inputs (test mode)

@@ -3,15 +3,21 @@
 // LobbyRegistry DO: public room summaries + code allocation. Room DO: two-player
 // match state machine (LOBBY -> BUILD -> COUNTDOWN -> COMBAT -> RESULT).
 // The Room DO is a validated relay + match authority — it never runs 60 Hz physics.
+//
+//   GET /ping?room=<code>[&shard=<shard>] - where that room runs, { colo, region }
+//   websocket /ws?code=<code>[&shard=<shard>&ticket=<t>] - that room, or its
+//                moved copy (a shard, see room.js)
+// Internal routes between room objects (/_adopt, /_released) are never forwarded.
 
 import { LobbyRegistry } from "./registry.js";
 import { Room } from "./room.js";
-import { playerWhere, withWhere } from "./netplace.js";
+import { playerWhere, withWhere, shardRegion, roomStub } from "./netplace.js";
 
 // Durable Object classes must be exported from the main module
 export { LobbyRegistry, Room };
 
 const PROTOCOL_VERSION = 1;
+const ROOM_CODE = /^[A-Z0-9]{4,6}$/; // as the /ws route normalizes it
 
 function allowedOrigins(env) {
   const raw = env.ALLOWED_ORIGINS || "https://games.andrenijman.com,https://scrap.andrenijman.com";
@@ -53,6 +59,16 @@ export default {
       return json({ ok: true, v: PROTOCOL_VERSION, time: Date.now() });
     }
 
+    // A room's ping target, timed by the waiting room.
+    if (url.pathname === "/ping" && request.method === "GET") {
+      const code = url.searchParams.get("room") || "";
+      const shard = url.searchParams.get("shard") || "";
+      if (!ROOM_CODE.test(code) || (shard && !shardRegion(shard))) {
+        return json({ error: "bad room", code: "bad_room" }, 400, { "cache-control": "no-store" });
+      }
+      return roomStub(env.ROOMS, code, shard).fetch("https://room/ping");
+    }
+
     if (url.pathname === "/lobbies") {
       const id = env.REGISTRY.idFromName("global");
       const stub = env.REGISTRY.get(id);
@@ -77,6 +93,10 @@ export default {
       const code = (u.get("code") || u.get("room") || "").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 6);
       const name = (u.get("name") || "Player").slice(0, 24);
       const reconnectToken = u.get("rt") || null;
+      // a moved room's shard, and this player's seat there (room.js)
+      const shard = create ? "" : u.get("shard") || "";
+      const ticket = (u.get("ticket") || "").replace(/[^a-z0-9]/g, "").slice(0, 16);
+      if (shard && !shardRegion(shard)) return json({ error: "bad shard", code: "bad_room" }, 400);
 
       let roomCode = code;
       if (create) {
@@ -96,12 +116,11 @@ export default {
       // Where the player connects from, for the lag log (request.cf is only
       // reliable here). DEV_TRUST_WHERE (wrangler dev --var) lets tests fake it.
       const where = playerWhere(request, { trustHeaders: env.DEV_TRUST_WHERE === "1" });
-      const roomId = env.ROOMS.idFromName(roomCode);
-      const roomStub = env.ROOMS.get(roomId);
+      const stub = roomStub(env.ROOMS, roomCode, shard);
       const forwardUrl = new URL(request.url);
       forwardUrl.pathname = "/room";
-      forwardUrl.search = `?code=${roomCode}&name=${encodeURIComponent(name)}&create=${create ? 1 : 0}${reconnectToken ? `&rt=${encodeURIComponent(reconnectToken)}` : ""}`;
-      return roomStub.fetch(forwardUrl.toString(), withWhere(request, where));
+      forwardUrl.search = `?code=${roomCode}&name=${encodeURIComponent(name)}&create=${create ? 1 : 0}${reconnectToken ? `&rt=${encodeURIComponent(reconnectToken)}` : ""}${ticket ? `&ticket=${ticket}` : ""}`;
+      return stub.fetch(forwardUrl.toString(), withWhere(request, where));
     }
 
     return json({ error: "not found" }, 404);
