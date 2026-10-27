@@ -1,5 +1,6 @@
-// Plain-Node stand-ins for a Room Durable Object's state, sockets and env,
-// shared by the latency unit tests.
+// Plain-Node stand-ins for Room Durable Objects: state, sockets, alarms, a
+// NETLOG that keeps what it is sent, and a ROOMS namespace whose objects are
+// Room instances in this process. Shared by the latency unit tests.
 import { Room } from "../../worker/room.js";
 
 export interface FakeSocket {
@@ -47,14 +48,50 @@ export function fakeState() {
 
 export const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 export const sent = (ws: FakeSocket) => ws.sent.map((m) => JSON.parse(m));
+export const sentOf = (ws: FakeSocket, t: string) => sent(ws).filter((m) => m.t === t);
 
-export async function makeRoom(env: Record<string, unknown> = {}) {
-  const state = fakeState();
-  const logs: { game: string; log: any }[] = [];
-  const room = new Room(state, { NETLOG: { record: async (game: string, log: unknown) => { logs.push({ game, log }); return { ok: true }; } }, ...env });
-  room.colo = "FRA";
+export interface World {
+  env: Record<string, unknown>;
+  logs: { game: string; log: any }[];
+  objects: Map<string, { room: Room; state: ReturnType<typeof fakeState> }>;
+  object(name: string): { room: Room; state: ReturnType<typeof fakeState> };
+}
+
+/** A NETLOG and, unless `rooms` is false, a ROOMS namespace (`adopt` can make /_adopt fail). */
+export function fakeWorld({ rooms = true, adoptFails = false } = {}): World {
+  const logs: World["logs"] = [];
+  const objects: World["objects"] = new Map();
+  const env: Record<string, unknown> = { NETLOG: { record: async (game: string, log: unknown) => { logs.push({ game, log }); return { ok: true }; } } };
+  const object = (name: string) => {
+    let o = objects.get(name);
+    if (!o) {
+      const state = fakeState();
+      const room = new Room(state, env);
+      room.colo = "FRA";
+      o = { room, state };
+      objects.set(name, o);
+    }
+    return o;
+  };
+  if (rooms) {
+    env.ROOMS = {
+      idFromName: (name: string) => name,
+      get: (name: string) => ({
+        fetch: async (url: string, init?: RequestInit) => {
+          if (adoptFails && new URL(url).pathname === "/_adopt") throw new Error("network");
+          return object(name).room.fetch(new Request(url, init));
+        },
+      }),
+    };
+  }
+  return { env, logs, objects, object };
+}
+
+/** The room object for code ABCDE in `world`, with a message helper. */
+export async function makeRoom(world: World = fakeWorld({ rooms: false })) {
+  const { room, state } = world.object("ABCDE");
   await room.restore();
   room.s.code = "ABCDE";
   const msg = (ws: FakeSocket, t: string, payload: unknown) => room.webSocketMessage(ws, JSON.stringify({ v: 1, t, payload }));
-  return { room, state, logs, msg };
+  return { room, state, logs: world.logs, msg, world };
 }

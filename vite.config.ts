@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { configDefaults } from "vitest/config";
 
 export default defineConfig({
   base: "./",
@@ -15,5 +16,9 @@ export default defineConfig({
   },
   server: {
     port: 5180,
+  },
+  test: {
+    // runs against wrangler dev: node tests/latency/rooms.test.mjs
+    exclude: [...configDefaults.exclude, "tests/latency/rooms.test.mjs"],
   },
 });
