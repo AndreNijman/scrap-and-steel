@@ -1,3 +1,10 @@
+// SCRAP AND STEEL online relay (worker/relay.js). `npx wrangler dev` runs it locally.
+//
+// Production is env.production: `rime secret use cloudflare
+// cloudflare.wrangler.deploy scrap-and-steel-relay` runs `wrangler deploy --env
+// production` with the broker's token (see rime.toml in the deploy clone).
+// NETLOG is games-guard's NetLog entrypoint: each finished match's lag
+// statistics go there (games.andrenijman.com/_guard/admin/lag).
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "scrap-and-steel-relay",
@@ -30,5 +37,24 @@
       "pattern": "relay.scrap.andrenijman.com",
       "custom_domain": true
     }
-  ]
+  ],
+  "services": [{ "binding": "NETLOG", "service": "games-guard", "entrypoint": "NetLog" }],
+  // The same Worker name, so production keeps its Durable Object namespace.
+  // Bindings are not inherited by an environment, so they repeat.
+  "env": {
+    "production": {
+      "name": "scrap-and-steel-relay",
+      "workers_dev": true,
+      "preview_urls": false,
+      "observability": { "enabled": true },
+      "durable_objects": {
+        "bindings": [
+          { "name": "ROOMS", "class_name": "Room" },
+          { "name": "REGISTRY", "class_name": "LobbyRegistry" }
+        ]
+      },
+      "routes": [{ "pattern": "relay.scrap.andrenijman.com", "custom_domain": true }],
+      "services": [{ "binding": "NETLOG", "service": "games-guard", "entrypoint": "NetLog" }]
+    }
+  }
 }

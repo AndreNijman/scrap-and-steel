@@ -4,6 +4,10 @@
 //   match seed, input frames, authority snapshots, checksums, reconnect grace.
 // 2D inputs are packed onto the protocol fields:
 //   throttle = forward - back   |  steer = aux  |  fire = fire  |  lift = turret axis
+// A ping goes once a second with this client's ping and frame rate, for the
+// relay's lag log.
+
+import { NetPing } from "./netping.js";
 
 export const PROTOCOL_VERSION = 1;
 export const GAME_VERSION = "1.0.0";
@@ -30,6 +34,8 @@ export class RelayClient {
   private seq = 0;
   private listeners: ((e: RelayEvent) => void)[] = [];
   reconnectToken: string | null = null;
+  private pinger: NetPing | null = null;
+  private pingTimer = 0;
 
   constructor(url?: string) {
     this.url = url ?? resolveRelayUrl();
@@ -50,13 +56,23 @@ export class RelayClient {
     const saved = sessionStorage.getItem("scrap_reconnect_token");
     const full = `${this.url}/ws?${query}&v=${PROTOCOL_VERSION}&gv=${encodeURIComponent(GAME_VERSION)}${saved ? `&rt=${encodeURIComponent(saved)}` : ""}`;
     this.ws = new WebSocket(full);
-    this.ws.onopen = () => this.emit({ kind: "open" });
-    this.ws.onclose = () => this.emit({ kind: "close" });
+    this.stopPing();
+    const pinger = new NetPing();
+    this.pinger = pinger;
+    this.ws.onopen = () => {
+      this.pingTimer = window.setInterval(() => this.send("ping", pinger.next()), 1000);
+      this.emit({ kind: "open" });
+    };
+    this.ws.onclose = () => {
+      if (this.pinger === pinger) this.stopPing();
+      this.emit({ kind: "close" });
+    };
     this.ws.onerror = () => this.emit({ kind: "error", message: "WebSocket error" });
     this.ws.onmessage = (ev) => {
       try {
         const env = JSON.parse(String(ev.data));
         if (env.v !== PROTOCOL_VERSION || typeof env.t !== "string") return;
+        if (env.t === "pong") this.pinger?.pong((env.payload as { c?: number } | undefined)?.c);
         if (env.t === "welcome") {
           const p = env.payload as { reconnectToken?: string } | undefined;
           if (p?.reconnectToken) {
@@ -82,8 +98,16 @@ export class RelayClient {
   }
 
   close() {
+    this.stopPing();
     this.ws?.close();
     this.ws = null;
+  }
+
+  private stopPing() {
+    clearInterval(this.pingTimer);
+    this.pingTimer = 0;
+    this.pinger?.stop();
+    this.pinger = null;
   }
 }
 

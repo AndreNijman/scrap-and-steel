@@ -4,6 +4,8 @@
 // hibernation via serializeAttachment; timers use storage.setAlarm (setTimeout
 // dies with the isolate and would silently kill rooms — the roadmap forbids it).
 
+import { NetStats, sendNetLog, coloOf } from "./netstats.js";
+
 const PROTOCOL_VERSION = 1;
 const BUILD_GRACE_SEC = 30;
 const COMBAT_GRACE_SEC = 12;
@@ -46,6 +48,9 @@ export class Room {
     this.state = state;
     this.env = env;
     this.restored = false;
+    this.net = null; // lag stats for the match in progress (in memory only)
+    this.netOutcomeSeen = false;
+    this.colo = "";
   }
 
   // ---------- state persistence ----------
@@ -195,6 +200,7 @@ export class Room {
         ws.serializeAttachment({ slot: idx });
         this.s.slots[idx].connected = true;
         this.s.slots[idx].disconnectedAt = 0;
+        this.net?.reconnect(reconnectToken);
         await this.save();
         this.sendTo(idx, "welcome", { slot: idx, reconnectToken, state: this.lobbyStatePayload() });
         this.broadcast("peer_reconnected", { slot: idx }, idx);
@@ -211,6 +217,7 @@ export class Room {
     if (free === -1) return false;
     const token = crypto.randomUUID();
     this.s.slots[free] = { name, token, ready: false, locked: false, connected: true, bpHash: null };
+    this.net?.seat(token, name);
     await this.save();
     this.state.acceptWebSocket(ws, ["room"]);
     ws.serializeAttachment({ slot: free });
@@ -264,7 +271,8 @@ export class Room {
 
     switch (msg.t) {
       case "ping":
-        this.sendTo(slot, "pong", { t: p.t });
+        this.net?.ping(s.token, p.rtt, p.fps, p.frameMax);
+        this.sendTo(slot, "pong", { t: p.t, c: typeof p.c === "number" ? p.c : undefined });
         return;
 
       case "set_settings": {
@@ -307,6 +315,7 @@ export class Room {
       case "input_frame": {
         if (this.s.phase !== "combat") return;
         if (typeof p.tick !== "number") return;
+        this.net?.message(s.token);
         this.sendTo(1 - slot, "input_frame", { slot, ...pickInput(p) });
         return;
       }
@@ -320,6 +329,7 @@ export class Room {
 
       case "checksum": {
         if (this.s.phase !== "combat") return;
+        this.netOutcomeSeen = true; // clients send it once their sim reaches a result
         this.sendTo(1 - slot, "checksum", { slot, tick: p.tick, hash: p.hash });
         return;
       }
@@ -361,6 +371,7 @@ export class Room {
     // absolute deadline: the DO owns the clock
     this.s.buildDeadline = Date.now() + this.s.settings.buildTimeSec * 1000;
     await this.save();
+    this.startNetLog();
     this.broadcast("build_start", { deadline: this.s.buildDeadline, settings: this.s.settings });
     this.ensureRegistryUpdate();
     await this.armDeadlineTimer();
@@ -404,6 +415,8 @@ export class Room {
     this.s.phase = "result";
     this.s.result = { winner, reason, at: Date.now() };
     await this.save();
+    // the relay never sees a KO; a disconnect after a client's result checksum is a finished match
+    this.endNetLog(reason === "time-limit" || this.netOutcomeSeen ? "finished" : "abandoned");
     this.broadcast("result", this.s.result);
     this.ensureRegistryUpdate();
     await this.state.storage.deleteAlarm();
@@ -450,7 +463,29 @@ export class Room {
     }
   }
 
+  // ---------- lag log ----------
+
+  // One record per match, from the build phase to the result (or until the
+  // room empties), sent to games-guard's NetLog.
+  startNetLog() {
+    this.endNetLog("abandoned");
+    this.net = new NetStats();
+    this.netOutcomeSeen = false;
+    for (const s of this.s.slots) if (s) this.net.seat(s.token, s.name);
+    if (!this.colo) coloOf().then((colo) => { this.colo = colo; });
+  }
+
+  endNetLog(outcome) {
+    const net = this.net;
+    this.net = null;
+    if (!net) return;
+    const record = net.record({ code: this.s.code, mode: `1v1 · ${this.s.settings.arena}`, outcome, colo: this.colo });
+    if (record.runTime < 10) return;
+    sendNetLog(this.env, this.state, "scrap", record);
+  }
+
   async cleanup() {
+    this.endNetLog("closed");
     this.s.phase = "lobby";
     await this.save();
     if (this.env.REGISTRY && this.s.code) {

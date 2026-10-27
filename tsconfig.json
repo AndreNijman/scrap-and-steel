@@ -15,6 +15,7 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "noEmit": true,
+    "allowJs": true,
     "types": ["vite/client"]
   },
   "include": ["src", "tests", "shared"]
