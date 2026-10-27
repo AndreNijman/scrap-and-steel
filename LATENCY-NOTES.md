@@ -84,6 +84,25 @@ instances in Node with scripted inputs, each side's inputs delivered to the
 other at 100 ms +-20 ms one way (200 ms RTT +-40) exactly as the client does
 today. The "after" line is the same code path.
 
+### Item 1 result
+
+`node_modules/.bin/vite-node tests/latency/harness.mjs` (6 scripted matches,
+scrapyard, up to 45 s each, ticks aligned on both sides):
+
+| run | robot position error | ticks the sims disagree on destroyed parts | same winner |
+|---|---|---|---|
+| control: same inputs, no network | 0.00 m | 0.0% | 6/6 |
+| control: 0 ms, 30 Hz input_frame | 2.65 m | 51.1% | 4/6 |
+| before: 100 ms +-20 one way | 3.00 m | 55.0% | 6/6 |
+| after: no sim change (TIER-2) | 3.00 m | 55.0% | 6/6 |
+
+The sim is deterministic (first control), so the drift is all input timing:
+even with no network delay, sending inputs every 2nd tick and applying them on
+arrival puts the two players' matches metres apart within seconds, and they
+can name different winners. Latency only adds a little on top. Hiding delay
+cannot fix this; only lockstep or rollback can. "Same winner 6/6" at 200 ms
+is chance: the matches here mostly end in a time-out draw on both sides.
+
 ### Rollback estimate
 
 What must snapshot/restore per tick:
@@ -132,3 +151,23 @@ checksums. About 3-5 days; it costs every player D ticks of input delay
   re-arm from 81fa523 keeps it when a disconnect's 1 s poll replaces it.
 - There is no room list in the client (it never calls `/lobbies`), so item 3's
   lobby label is on the waiting-room bar only.
+
+- Limits of the move:
+  - Older clients send no `regions`, so a room with one never moves.
+  - If only one player reaches the shard within 6 s, the other's seat is
+    freed and the room waits in the shard's lobby for a new opponent, as a
+    normal room does after a leave; it does not move back.
+  - A client that joins the old code after the move gets `move` from
+    `sendOnward()`. The socket is closed with 4000 "moved" on its next
+    message (the new client closes it itself on `move`; an older client's
+    next ping does). Under wrangler dev 4.128 a close from the DO's fetch
+    or an alarm never reached the client and an accept()-ed socket closed
+    with a timer threw "Network connection lost", so the close waits for a
+    message. Worth re-checking on production.
+  - The shard object is `ROOMS.idFromName("<code>~<shard>")` with a
+    `locationHint`, which Cloudflare treats as a hint: the record's `region`
+    is the shard's chosen region, not a measured colo.
+- The lobby ping comes from `/ping` (GET, through the relay to the room
+  object). The HUD shows the client's last 1 Hz ping sample, so it includes
+  any main-thread stall: in the browser smoke on a loaded machine (load 25 on
+  16 cores) localhost read 58-142 ms in the lobby and 74-2520 ms in combat.
