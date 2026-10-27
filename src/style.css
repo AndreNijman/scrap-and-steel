@@ -160,7 +160,7 @@ button:hover { border-color: var(--accent); }
 }
 #lobby-info { font-size: 12px; }
 #lobby-info b { color: var(--accent2); letter-spacing: 0.15em; }
-#lobby-region { font-size: 11px; color: var(--dim); }
+#lobby-region { font-size: 11px; color: var(--dim); white-space: nowrap; }
 
 /* live ping during online play */
 #hud-ping {
