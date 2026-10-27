@@ -8,6 +8,7 @@
 // relay's lag log. The client also sends its ping to every Cloudflare region
 // (netprobe.js), and follows `move` when the relay moves the room to a fairer
 // region at match start: it reconnects to the room's shard with its ticket.
+// A dev's pass (netdev.js) rides on every join of this client, moves included.
 
 import { NetPing } from "./netping.js";
 import { probeRegions } from "./netprobe.js";
@@ -48,6 +49,8 @@ export class RelayClient {
   movingTo = "";
   private probes: Record<string, number> | null = null;
   private probesSentOn: WebSocket | null = null;
+  /** This browser's dev pass (netdev.js devPass()), sent with every join; null for everyone else. */
+  dev: string | null = null;
 
   constructor(url?: string) {
     this.url = url ?? resolveRelayUrl();
@@ -66,7 +69,7 @@ export class RelayClient {
 
   connect(query: string) {
     const saved = sessionStorage.getItem("scrap_reconnect_token");
-    const full = `${this.url}/ws?${query}&v=${PROTOCOL_VERSION}&gv=${encodeURIComponent(GAME_VERSION)}${saved ? `&rt=${encodeURIComponent(saved)}` : ""}`;
+    const full = `${this.url}/ws?${query}&v=${PROTOCOL_VERSION}&gv=${encodeURIComponent(GAME_VERSION)}${saved ? `&rt=${encodeURIComponent(saved)}` : ""}${this.dev ? `&dev=${encodeURIComponent(this.dev)}` : ""}`;
     this.ws = new WebSocket(full);
     const ws = this.ws;
     probeRegions().then((ms: Record<string, number> | null) => {
@@ -88,6 +91,8 @@ export class RelayClient {
     this.ws.onmessage = (ev) => {
       try {
         const env = JSON.parse(String(ev.data));
+        // netdev.js's standard announcement comes without the protocol envelope
+        if (env?.t === "dev-joined") { this.emit({ kind: "message", t: env.t, payload: { name: String(env.name ?? "") } }); return; }
         if (env.v !== PROTOCOL_VERSION || typeof env.t !== "string") return;
         if (env.t === "pong") this.pinger?.pong((env.payload as { c?: number } | undefined)?.c);
         if (env.t === "welcome") {
@@ -100,9 +105,15 @@ export class RelayClient {
           this.region = typeof p?.region === "string" ? p.region : "";
           this.sendProbes();
         }
+        if (env.t === "spectate") {
+          // a dev watching a full room: no seat, but the same room and region
+          const p = env.payload as { region?: string; state?: { code?: string } } | undefined;
+          if (p?.state?.code) this.roomCode = p.state.code;
+          this.region = typeof p?.region === "string" ? p.region : "";
+        }
         this.emit({ kind: "message", t: env.t, payload: env.payload });
         if (env.t === "move") this.follow(env.payload as { shard?: string; region?: string; ticket?: string });
-        else if (env.t === "welcome") this.movingTo = "";
+        else if (env.t === "welcome" || env.t === "spectate") this.movingTo = "";
       } catch {
         // malformed frame ignored
       }

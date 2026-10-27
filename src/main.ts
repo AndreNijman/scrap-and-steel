@@ -8,7 +8,8 @@ import { Builder } from "./game/builder";
 import { Simulation, TICK, type BotDriver } from "./game/sim";
 import { ARENAS } from "./game/arena";
 import { BOT_SPECS, DriverBot, type BotSpec } from "./game/bots";
-import { RelayClient, packInputs, unpackInputs, resolveRelayUrl } from "./game/net";
+import { RelayClient, packInputs, unpackInputs, resolveRelayUrl, type NetInputs } from "./game/net";
+import { devPass, joinCode, clearJoinCode, setPlayer, showDevJoined } from "./game/netdev.js";
 import { probeRegions, pingUrl, regionLabel } from "./game/netprobe.js";
 import { WorldRenderer } from "./render/draw";
 import { LogicEditor, targetOptions, NODE_DEFS } from "./ui/logicEditor";
@@ -58,6 +59,13 @@ let roomPingMs: number | null = null; // this player's ms to the room (waiting-r
 let hudPingTimer = 0;
 let tutorial: TutorialState = loadTutorialState();
 let cameraFollow = true;
+// A dev watching a full room (the relay's `spectate`): their own copy of the
+// match, both robots driven by the relayed inputs, each applied on the tick
+// its player stamped it. Inputs wait in `queue` per slot; `have` is how far
+// each player's inputs have come, `heard` when they last did.
+const PLAYER_NAME = "Player"; // the game has no player names; the relay's default
+let spectating = false;
+let spec: { queue: [number, NetInputs][][]; have: number[]; heard: number[]; logDone: boolean; caughtUp: boolean; acc: number } | null = null;
 let toastTimer = 0;
 let tutorialTimer = 0;
 
@@ -77,6 +85,10 @@ function boot() {
   window.addEventListener("resize", resize);
   resize();
   showScreen("menu");
+  setPlayer(PLAYER_NAME, null);
+  // the admin page's link into a room: straight into the online join
+  const code = joinCode();
+  if (code) void connectOnline(`code=${encodeURIComponent(code)}`).finally(clearJoinCode);
 }
 
 function resize() {
@@ -165,7 +177,7 @@ function drawMenuBg() {
 function bindMenu() {
   $("btn-workshop").onclick = () => { sfx.uiClick(); enterWorkshop(); };
   $("btn-quick").onclick = () => { sfx.uiClick(); startBotBattle(); };
-  $("btn-online").onclick = () => { sfx.uiClick(); connectOnline("create=1"); };
+  $("btn-online").onclick = () => { sfx.uiClick(); void connectOnline("create=1"); };
   $("btn-join").onclick = () => { sfx.uiClick(); promptJoin(); };
   $("btn-help").onclick = () => { sfx.uiClick(); showHelp(); };
   drawMenuBg();
@@ -190,7 +202,7 @@ function promptJoin() {
   `);
   $("do-join").onclick = () => {
     const c = ($("join-code") as HTMLInputElement).value.trim().toUpperCase();
-    if (c.length >= 4) { closeModal(); connectOnline(`code=${c}`); }
+    if (c.length >= 4) { closeModal(); void connectOnline(`code=${c}`); }
   };
   $("join-cancel").onclick = closeModal;
 }
@@ -339,13 +351,13 @@ function bindGameUi() {
   $("btn-load").onclick = () => doLoad();
   $("btn-export").onclick = () => doExport();
   $("btn-import").onclick = () => doImport();
-  $("btn-menu").onclick = () => { relay?.close(); relay = null; showScreen("menu"); checkRelay(); };
+  $("btn-menu").onclick = () => { relay?.close(); relay = null; leftRoom(); showScreen("menu"); checkRelay(); };
   $("btn-lock").onclick = () => {
     if (battleKind === "bot") startMatchVsBot();
     else if (battleKind === "online") onLockOnline();
   };
   $("btn-lobby-ready").onclick = () => { relay?.send("set_ready", { ready: true }); sfx.uiClick(); };
-  $("btn-lobby-leave").onclick = () => { relay?.close(); relay = null; battleKind = null; $("lobby-bar").classList.add("hidden"); $("btn-lock").classList.add("hidden"); };
+  $("btn-lobby-leave").onclick = () => { relay?.close(); relay = null; battleKind = null; leftRoom(); $("lobby-bar").classList.add("hidden"); $("btn-lock").classList.add("hidden"); };
   $("btn-rematch").onclick = () => {
     if (battleKind === "online") relay?.send("rematch", {});
     else if (battleKind === "bot") startMatchVsBot();
@@ -675,21 +687,36 @@ function bindSimEvents() {
 // =========================================================================
 // online
 
-function connectOnline(query: string) {
-  relay = new RelayClient();
-  relay.on((e) => {
+async function connectOnline(query: string) {
+  const r = new RelayClient();
+  relay = r;
+  r.on((e) => {
     if (e.kind === "message") handleRelay(e.t, e.payload);
     else if (e.kind === "error") toast("Relay error");
-    else if (e.kind === "close") toast("Relay disconnected");
+    else if (e.kind === "close") { toast("Relay disconnected"); leftRoom(); }
   });
-  relay.connect(query);
   toast("Connecting to relay…");
+  // a dev's pass goes with the join (null at once for everyone else)
+  const dev = await devPass();
+  if (relay !== r) return;
+  r.dev = dev?.pass ?? null;
+  r.connect(query);
+}
+
+/** Out of the room: no seat, not watching (the admin page's live view too). */
+function leftRoom() {
+  spectating = false;
+  spec = null;
+  setPlayer(PLAYER_NAME, null);
 }
 
 function handleRelay(t: string, payload: unknown) {
   const p = (payload ?? {}) as Record<string, unknown>;
   switch (t) {
     case "welcome": {
+      if (spectating) $("result-overlay").classList.add("hidden"); // a spectator took a free seat
+      spectating = false;
+      spec = null;
       mySlot = p.slot as number;
       isAuthority = mySlot === 0;
       const st = p.state as { code?: string; settings?: typeof lobbySettings };
@@ -703,9 +730,47 @@ function handleRelay(t: string, payload: unknown) {
       $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: share the code, then READY`;
       refreshPanels();
       toast(relay?.movingTo ? `Room moved to ${regionLabel(relay.movingTo, 0)}` : `Connected as player ${mySlot + 1}`);
+      setPlayer(`${PLAYER_NAME} ${mySlot + 1}`, roomCode);
       roomPingMs = null;
       showLobbyRegion();
       timeRoomPing();
+      break;
+    }
+    case "spectate": {
+      // a dev in a full room: watch until a seat is free
+      spectating = true;
+      spec = null;
+      mySlot = 0;
+      const st = p.state as { code?: string; settings?: typeof lobbySettings };
+      roomCode = st?.code ?? null;
+      if (st?.settings) lobbySettings = { ...lobbySettings, ...st.settings };
+      battleKind = "online";
+      showScreen("game");
+      setModeBuild();
+      $("lobby-bar").classList.remove("hidden");
+      $("btn-lock").classList.add("hidden");
+      ($("btn-lobby-ready") as HTMLButtonElement).disabled = true;
+      showSpectating("the room is full");
+      toast(relay?.movingTo ? `Room moved to ${regionLabel(relay.movingTo, 0)}` : "Spectating: you take the next free seat");
+      setPlayer("Spectator", roomCode);
+      roomPingMs = null;
+      showLobbyRegion();
+      timeRoomPing();
+      break;
+    }
+    case "dev-joined": showDevJoined(String(p.name ?? "")); break;
+    case "spectate_log": {
+      if (!spectating || !spec) break;
+      for (const e of (p.entries as number[][]) ?? []) {
+        const [slot, tick, throttle, steer, fire, lift] = e as [number, number, number, number, number, number];
+        if (slot === 0 || slot === 1) spec.queue[slot]!.push([tick, unpackInputs({ throttle, steer, fire, lift })]);
+      }
+      if (p.done) {
+        const ticks = (p.ticks as number[] | undefined) ?? [];
+        for (const i of [0, 1]) spec.have[i] = Math.max(spec.have[i]!, Number(ticks[i]) || 0);
+        spec.logDone = true;
+        if (!p.complete) toast("This match's start was not kept: the view may differ from the players'");
+      }
       break;
     }
     case "move": toast(`Moving room to ${regionLabel(String(p.region ?? ""), 0)}…`); break;
@@ -714,12 +779,21 @@ function handleRelay(t: string, payload: unknown) {
       if (st.settings) lobbySettings = { ...lobbySettings, ...st.settings };
       const players = st.players ?? [];
       const both = players.length === 2 && players[0] && players[1];
+      if (spectating) { if (!spec) showSpectating(both ? "waiting for the players to ready up" : "a seat is free"); break; }
       ($("btn-lobby-ready") as HTMLButtonElement).disabled = !both;
       $("lobby-info").innerHTML = `ROOM <b>${roomCode}</b>: ${both ? (players[mySlot]?.ready ? "waiting for opponent…" : "ready. waiting for opponent…") : "waiting for an opponent…"}`;
       break;
     }
     case "build_start": {
       lobbySettings = { ...lobbySettings, ...(p.settings as typeof lobbySettings) };
+      if (spectating) {
+        // between matches: back to this dev's own workshop until the next one starts
+        $("result-overlay").classList.add("hidden");
+        spec = null;
+        if (mode === "test") setModeBuild();
+        showSpectating("build phase: the match starts when both lock in");
+        break;
+      }
       $("lobby-bar").classList.add("hidden");
       $("btn-lock").classList.remove("hidden");
       ($("btn-lock") as HTMLButtonElement).disabled = false;
@@ -729,6 +803,7 @@ function handleRelay(t: string, payload: unknown) {
       break;
     }
     case "match_countdown": {
+      if (spectating) { startSpectatorMatch(p); break; }
       const bps = p.blueprints as (Blueprint | null)[];
       opponentBp = bps[1 - mySlot] ? migrateBlueprint(bps[1 - mySlot]) : null;
       const mine = bps[mySlot] ? migrateBlueprint(bps[mySlot]) : null;
@@ -741,6 +816,7 @@ function handleRelay(t: string, payload: unknown) {
     }
     case "input_frame": {
       const slot = p.slot as number;
+      if (spectating) { if (spec && (slot === 0 || slot === 1)) spectatorInput(slot, Number(p.tick) || 0, unpackInputs(p)); break; }
       remoteInputs[slot] = unpackInputs(p);
       break;
     }
@@ -750,10 +826,11 @@ function handleRelay(t: string, payload: unknown) {
     }
     case "checksum": break;
     case "pong": break;
-    case "peer_disconnected": toast(`Opponent disconnected: ${p.graceSec}s to reconnect`); break;
-    case "peer_reconnected": toast("Opponent reconnected"); break;
+    case "peer_disconnected": toast(`${spectating ? `Player ${Number(p.slot) + 1}` : "Opponent"} disconnected: ${p.graceSec}s to reconnect`); break;
+    case "peer_reconnected": toast(spectating ? `Player ${Number(p.slot) + 1} reconnected` : "Opponent reconnected"); break;
     case "result": {
       const winner = p.winner as number | null;
+      if (spectating) { if (spec && !resultShown) showResult(winner, p.reason as string); break; }
       if (!resultShown) showResult(winner === null ? null : winner === mySlot ? 0 : 1, p.reason as string);
       break;
     }
@@ -812,21 +889,95 @@ function startOnlineMatch(seed: number, startAt: number) {
   countdown(sim.arena, () => {});
 }
 
+function showSpectating(what: string) {
+  $("lobby-info").innerHTML = `SPECTATING ROOM <b>${roomCode}</b>: ${what}. You take the next free seat.`;
+}
+
+// The match as a spectator sees it: both blueprints in seat order (robot 1
+// is seat 1's), so it matches seat 1's own sim. Joined mid-match, it replays
+// the inputs so far as fast as the frame allows, without sound or particles.
+function startSpectatorMatch(p: Record<string, unknown>) {
+  const bps = ((p.blueprints as (Blueprint | null)[]) ?? []).map((b) => (b ? migrateBlueprint(b) : null));
+  if (!bps[0] || !bps[1]) { toast("Match blueprint invalid"); return; }
+  if (typeof p.combatLimitSec === "number") lobbySettings.combatLimitSec = p.combatLimitSec;
+  const startAt = Number(p.startAt) || Date.now();
+  const midMatch = !!p.resume && startAt < Date.now() - 500;
+  resultShown = false;
+  $("result-overlay").classList.add("hidden");
+  sim = new Simulation({ bpA: bps[0], bpB: bps[1], arena: ARENAS[lobbySettings.arena] ?? ARENAS.range!, seed: (p.seed as number) >>> 0 });
+  spec = { queue: [[], []], have: [-1, -1], heard: [startAt, startAt], logDone: !p.resume, caughtUp: !midMatch, acc: 0 };
+  mode = "test";
+  $("btn-test").textContent = "■ BUILD";
+  renderer.camX = sim.arena.width / 2;
+  cameraFollow = true;
+  combatDeadline = startAt + lobbySettings.combatLimitSec * 1000;
+  showSpectating(midMatch ? "catching up with the match" : "match on");
+  if (!midMatch) {
+    bindSimEvents();
+    if (startAt > Date.now()) countdown(sim.arena, () => {});
+  }
+}
+
+function spectatorInput(slot: number, tick: number, input: NetInputs) {
+  if (!spec || tick < spec.have[slot]!) return; // a player whose sim restarted (reconnect) is held until it catches up
+  spec.have[slot] = tick;
+  spec.heard[slot] = Date.now();
+  spec.queue[slot]!.push([tick, input]);
+}
+
+// Step the spectator's sim up to the tick both players' inputs have reached
+// (a player silent for a second stops holding it back): at 60 Hz once close,
+// as many ticks as fit in 20 ms of the frame while catching up.
+function stepSpectator(dt: number) {
+  const outcome = () => sim?.outcome ?? null; // sim.step() sets it
+  if (!sim || !spec || !spec.logDone || resultShown || outcome()) return;
+  if (Date.now() < combatDeadline - lobbySettings.combatLimitSec * 1000) return; // countdown
+  const now = Date.now();
+  const live = [0, 1].filter((i) => now - spec!.heard[i]! < 1000);
+  const target = live.length ? Math.min(...live.map((i) => spec!.have[i]!)) : Math.max(...spec.have);
+  const catchUp = target - sim.tick > 30;
+  const t0 = performance.now();
+  spec.acc += dt;
+  let steps = 0;
+  while (sim.tick < target && !outcome()) {
+    if (catchUp) { if (performance.now() - t0 > 20) break; } else { if (spec.acc < TICK || steps >= 5) break; spec.acc -= TICK; }
+    for (const slot of [0, 1]) {
+      const q = spec.queue[slot]!;
+      const side = sim.robots[slot];
+      while (q.length && q[0]![0] <= sim.tick) { const [, inp] = q.shift()!; if (side && !side.defeated) side.input = { ...inp }; }
+    }
+    sim.step(TICK);
+    steps++;
+  }
+  if (sim.tick >= target) spec.acc = Math.min(spec.acc, TICK); // no banked time while waiting for inputs
+  if (!spec.caughtUp && target - sim.tick <= 30) {
+    spec.caughtUp = true;
+    bindSimEvents();
+    showSpectating("match on");
+  }
+  const o = outcome();
+  if (o && !resultShown) {
+    showResult(o.kind === "timeout" ? null : o.winner, o.kind === "timeout" ? "TIME LIMIT: DRAW" : o.winner === null ? "MUTUAL DESTRUCTION" : `robot ${2 - (o.winner ?? 0)} DISABLED`);
+  }
+}
+
+/** `playerIdx`: 0 this player won, 1 lost; a spectator passes the winning seat. null: a draw. */
 function showResult(playerIdx: number | null, reason: string) {
   resultShown = true;
   stopLoops();
   const banner = $("result-banner");
   banner.classList.remove("win", "lose", "draw");
-  if (playerIdx === null) banner.classList.add("draw");
+  if (playerIdx === null || spectating) banner.classList.add(playerIdx === null ? "draw" : "win");
   else banner.classList.add(playerIdx === 0 ? "win" : "lose");
-  banner.textContent = playerIdx === null ? "DRAW" : playerIdx === 0 ? "VICTORY" : "DEFEAT";
+  banner.textContent = playerIdx === null ? "DRAW" : spectating ? `ROBOT ${playerIdx + 1} WINS` : playerIdx === 0 ? "VICTORY" : "DEFEAT";
   $("result-reason").textContent = reason;
   const dur = sim ? Math.round(sim.tick / 60) : 0;
   const lost = sim ? [sim.robots[0]?.partsLost ?? 0, sim.robots[1]?.partsLost ?? 0] : [0, 0];
   $("result-stats").innerHTML = `
     <span><b>${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}</b>TIME</span>
-    <span><b>${lost[0]}</b>YOUR PARTS LOST</span>
-    <span><b>${lost[1]}</b>ENEMY PARTS LOST</span>`;
+    <span><b>${lost[0]}</b>${spectating ? "ROBOT 1" : "YOUR"} PARTS LOST</span>
+    <span><b>${lost[1]}</b>${spectating ? "ROBOT 2" : "ENEMY"} PARTS LOST</span>`;
+  $("btn-rematch").classList.toggle("hidden", spectating);
   $("result-overlay").classList.remove("hidden");
   if (playerIdx === null) sfx.draw();
   else if (playerIdx === 0) sfx.victory();
@@ -1398,8 +1549,8 @@ function frameBody(now: number) {
       }
     }
 
-    // online: send inputs, apply remote
-    if (battleKind === "online" && relay) {
+    // online: send inputs, apply remote (a spectator only watches)
+    if (battleKind === "online" && relay && !spectating) {
       if (sim.tick % 2 === 0) relay.send("input_frame", { ...packInputs({ ...input }), tick: sim.tick });
       const mine = sim.robots[mySlot];
       const other = sim.robots[1 - mySlot];
@@ -1409,7 +1560,8 @@ function frameBody(now: number) {
     }
 
     // step at 60 Hz fixed
-    if (Date.now() >= (combatDeadline - lobbySettings.combatLimitSec * 1000) || battleKind !== "online") {
+    if (spectating) stepSpectator(dt);
+    else if (Date.now() >= (combatDeadline - lobbySettings.combatLimitSec * 1000) || battleKind !== "online") {
       acc += dt;
       let steps = 0;
       while (acc >= TICK && steps < 5) {
@@ -1694,6 +1846,8 @@ Object.defineProperty(window as unknown as { __zoom: number }, "__zoom", { get: 
   state: () => ({
     mode,
     battleKind,
+    spectating,
+    spec: spec ? { caughtUp: spec.caughtUp, have: [...spec.have], queued: spec.queue.map((q) => q.length) } : null,
     screen,
     sim: sim
       ? {
