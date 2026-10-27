@@ -92,17 +92,17 @@ scrapyard, up to 45 s each, ticks aligned on both sides):
 | run | robot position error | ticks the sims disagree on destroyed parts | same winner |
 |---|---|---|---|
 | control: same inputs, no network | 0.00 m | 0.0% | 6/6 |
-| control: 0 ms, 30 Hz input_frame | 2.65 m | 51.1% | 4/6 |
-| before: 100 ms +-20 one way | 3.00 m | 55.0% | 6/6 |
-| after: no sim change (TIER-2) | 3.00 m | 55.0% | 6/6 |
+| control: 0 ms, 30 Hz input_frame | 0.68 m | 40.2% | 5/6 |
+| before: 100 ms +-20 one way | 1.48 m | 44.8% | 5/6 |
+| after: no sim change (TIER-2) | 1.48 m | 44.8% | 5/6 |
 
-The sim is deterministic (first control), so the drift is all input timing:
-even with no network delay, sending inputs every 2nd tick and applying them on
-arrival puts the two players' matches metres apart within seconds, and they
-can name different winners. Latency only adds a little on top. Hiding delay
-cannot fix this; only lockstep or rollback can. "Same winner 6/6" at 200 ms
-is chance over 6 matches (the 0 ms control got 4/6), not a sign that delay
-helps.
+The sim is deterministic (first control), so the drift comes from each sim
+applying the remote player's inputs at a different tick than its owner does.
+Even with no network delay, sending inputs every 2nd tick and applying them on
+arrival makes the two sims disagree on destroyed parts for 40% of ticks, and
+one match in six ends with a different winner on each side; 200 ms RTT
+doubles the position error. Hiding delay cannot fix this; only lockstep or
+rollback can.
 
 ### Rollback estimate
 
