@@ -29,6 +29,7 @@ export function fakeState() {
   const store = new Map<string, unknown>();
   const sockets: FakeSocket[] = [];
   const alarms: number[] = [];
+  const tags = new Map<FakeSocket, string[]>();
   return {
     store,
     sockets,
@@ -40,8 +41,8 @@ export function fakeState() {
       setAlarm: async (at: number) => { alarms.push(at); },
       deleteAlarm: async () => {},
     },
-    getWebSockets: () => sockets,
-    acceptWebSocket: (ws: FakeSocket) => { sockets.push(ws); },
+    getWebSockets: (tag?: string) => sockets.filter((ws) => !tag || tags.get(ws)?.includes(tag)),
+    acceptWebSocket: (ws: FakeSocket, wsTags: string[] = []) => { sockets.push(ws); tags.set(ws, wsTags); },
     waitUntil: () => {},
   };
 }

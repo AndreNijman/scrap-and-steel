@@ -188,8 +188,9 @@ async function main() {
   const late = client(`code=${half.code}`, "AU");
   const lateMove = await late.wait("move").catch(() => null);
   ok(lateMove?.shard === hm?.shard && !lateMove?.ticket, "a late joiner to the old code gets move without a ticket");
-  await sleep(1300);
-  ok(late.closed?.code === 4000 && late.closed?.reason === "moved", "and its socket to the old room closes with 4000 moved");
+  late.send("ping", { c: 1 }); // as a client that ignores `move` would
+  await sleep(500);
+  ok(late.closed?.code === 4000 && late.closed?.reason === "moved", `and that socket to the old room closes with 4000 moved on its next message (${JSON.stringify(late.closed)})`);
   const late2 = client(`code=${half.code}&shard=${lateMove?.shard}`, "AU");
   const lateWelcome = await late2.wait("welcome").catch(() => null);
   ok(lateWelcome?.slot === 1 && lateWelcome?.state?.code === half.code && lateWelcome?.region === "me", "the late joiner lands in the moved room");
@@ -214,7 +215,45 @@ async function main() {
   ok(stayRec && stayRec.region === "weur" && stayRec.moved === null && stayRec.seats.map((s) => s.country).join() === "FR,BE", "unmoved record: region, moved null, countries");
 
   for (const c of [stay.a, stay.b, ...back, host, late, late2]) try { c.ws.close(); } catch { /* closed */ }
+
+  await realClients();
   console.log(`${pass} passed, ${fail} failed`);
+}
+
+// The game's own client (src/game/net.ts) through a move, one process each
+// (tests/latency/client-agent.mjs): probes, `move`, reconnect with its ticket,
+// the build phase on the shard, and no disconnect seen on the way.
+function agent(query, probes, rtt) {
+  const bin = path.join(ROOT, "node_modules/.bin/vite-node");
+  const p = spawn(bin, ["tests/latency/client-agent.mjs", "--", BASE, query, JSON.stringify(probes), String(rtt)], { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] });
+  const a = { events: [], exited: new Promise((resolve) => p.on("exit", resolve)) };
+  let buf = "";
+  p.stdout.on("data", (d) => {
+    buf += d;
+    for (let i; (i = buf.indexOf("\n")) >= 0; buf = buf.slice(i + 1)) try { a.events.push(JSON.parse(buf.slice(0, i))); } catch { /* not ours */ }
+  });
+  a.first = async (pred, ms = 15_000) => {
+    for (let t = 0; t < ms; t += 100) { const e = a.events.find(pred); if (e) return e; await sleep(100); }
+    return null;
+  };
+  return a;
+}
+
+async function realClients() {
+  const host = agent("create=1", EUROPE, 300);
+  const code = (await host.first((e) => e.t === "welcome"))?.payload.code;
+  const guest = agent(`code=${code}`, ASIA, 30);
+  await Promise.all([host.exited, guest.exited]);
+  for (const [name, a] of [["host", host], ["guest", guest]]) {
+    const move = a.events.find((e) => e.t === "move");
+    const welcomes = a.events.filter((e) => e.t === "welcome");
+    const done = a.events.find((e) => e.done);
+    ok(move?.payload.region === "me" && move.payload.ticket, `${name}: the client gets move (${JSON.stringify(move?.payload)})`);
+    ok(done && /shard=me-/.test(done.url) && /ticket=/.test(done.url) && done.code === code && done.region === "me",
+      `${name}: it reconnected to the shard with its ticket and the build phase started there (${done?.url})`);
+    ok(welcomes.length === 2 && welcomes[0].payload.slot === welcomes[1].payload.slot, `${name}: same seat after the move`);
+    ok(!a.events.some((e) => e.kind === "close" || e.kind === "error" || e.timeout), `${name}: no disconnect or error on the way`);
+  }
 }
 
 // Never leave wrangler running: on a signal, or if the test hangs.
