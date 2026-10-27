@@ -23,12 +23,13 @@ function fakeSocket(): FakeSocket {
 async function makeRoom() {
   const store = new Map<string, unknown>();
   const sockets: FakeSocket[] = [];
+  const alarms: number[] = [];
   const state = {
     storage: {
       get: async (k: string) => store.get(k),
       put: async (k: string, v: unknown) => { store.set(k, v); },
       delete: async (k: string) => { store.delete(k); },
-      setAlarm: async () => {},
+      setAlarm: async (at: number) => { alarms.push(at); },
       deleteAlarm: async () => {},
     },
     getWebSockets: () => sockets,
@@ -48,7 +49,7 @@ async function makeRoom() {
   const msg = (ws: FakeSocket, t: string, payload: unknown) => room.webSocketMessage(ws, JSON.stringify({ v: 1, t, payload }));
   await msg(a, "set_ready", { ready: true });
   await msg(b, "set_ready", { ready: true });
-  return { room, logs, a, b, msg };
+  return { room, logs, a, b, msg, alarms };
 }
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -127,5 +128,34 @@ describe("relay lag log", () => {
     await tick();
     expect(second.logs.length).toBe(1);
     expect(second.logs[0]!.log.outcome).toBe("closed");
+  });
+});
+
+describe("disconnect grace", () => {
+  it("keeps the alarm going until the grace runs out, then forfeits", async () => {
+    const { room, logs, b, alarms } = await makeRoom();
+    room.net!.startedAt -= 30_000;
+    room.s.phase = "combat";
+    room.s.combatDeadline = Date.now() + 60_000;
+    await room.webSocketClose(b);
+    alarms.length = 0;
+    await room.alarm(); // the 1 s poll, grace not up yet
+    expect(alarms.length).toBe(1);
+    expect(alarms[0]!).toBeLessThan(room.s.combatDeadline);
+    room.s.slots[1].disconnectedAt -= 13_000;
+    await room.alarm();
+    await tick();
+    expect(room.s.phase).toBe("result");
+    expect(logs.length).toBe(1);
+  });
+
+  it("puts the phase deadline back once the player is back", async () => {
+    const { room, b, alarms } = await makeRoom();
+    await room.webSocketClose(b);
+    room.s.slots[1].connected = true;
+    room.s.slots[1].disconnectedAt = 0;
+    alarms.length = 0;
+    await room.alarm();
+    expect(alarms).toEqual([room.s.buildDeadline + 250]);
   });
 });

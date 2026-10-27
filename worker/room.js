@@ -461,6 +461,13 @@ export class Room {
         }
       }
     }
+    // a disconnect's 1 s alarm replaced the phase deadline: keep polling while
+    // anyone is still inside their grace, then put the deadline back
+    if (this.s.slots.some((s) => s && s.disconnectedAt && !s.connected)) {
+      await this.state.storage.setAlarm(Date.now() + 1000);
+    } else {
+      await this.armDeadlineTimer();
+    }
   }
 
   // ---------- lag log ----------
