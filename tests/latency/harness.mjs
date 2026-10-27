@@ -63,7 +63,7 @@ function match({ seed, bpA, bpB, oneWayMs, jitterMs }) {
       if (sim.tick % 2 === 0) inFlight.push({ at: now + oneWayMs + (net() * 2 - 1) * jitterMs, to: 1 - me, input: { ...input } });
       const mine = sim.robots[me], other = sim.robots[1 - me];
       if (mine && !mine.defeated) mine.input = { ...input };
-      if (other && !other.defeated) other.input = { ...(oneWayMs === null ? keys[1 - me][t] : remote[1 - me]) };
+      if (other && !other.defeated) other.input = { ...(oneWayMs === null ? keys[1 - me][t] : remote[me]) }; // what player `me` has received
       sim.step(TICK);
     }
     for (const r of [0, 1]) {
