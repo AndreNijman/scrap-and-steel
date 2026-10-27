@@ -249,14 +249,17 @@ export class Room {
     return new Response("not found", { status: 404 });
   }
 
-  // The room moved: tell the player where; they join the shard as usual.
+  // The room moved: tell the player where; they join the shard as usual. The
+  // game's client closes this socket itself on `move`; for one that doesn't
+  // (an older cached client), its next message (pings go once a second)
+  // closes it (under wrangler dev, a close from here or from an alarm never
+  // reached the client).
   sendOnward() {
     const pair = new WebSocketPair();
     const ws = pair[1];
     this.state.acceptWebSocket(ws, ["moved"]);
-    ws.serializeAttachment({ slot: -1 }); // not a player here: its messages and close are ignored
+    ws.serializeAttachment({ slot: -1, moved: true }); // not a player here
     ws.send(enc("move", { shard: this.s.moved.shard, region: this.s.moved.region }));
-    setTimeout(() => { try { ws.close(4000, "moved"); } catch { /* gone */ } }, MOVE_CLOSE_MS);
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -342,7 +345,10 @@ export class Room {
   async webSocketMessage(ws, message) {
     await this.restore();
     const slot = this.slotOf(ws);
-    if (slot === -1) return;
+    if (slot === -1) {
+      if (ws.deserializeAttachment()?.moved) try { ws.close(4000, "moved"); } catch { /* gone */ }
+      return;
+    }
     const s = this.s.slots[slot];
     if (!s) return;
 
