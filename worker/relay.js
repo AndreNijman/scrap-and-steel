@@ -6,6 +6,7 @@
 
 import { LobbyRegistry } from "./registry.js";
 import { Room } from "./room.js";
+import { playerWhere, withWhere } from "./netplace.js";
 
 // Durable Object classes must be exported from the main module
 export { LobbyRegistry, Room };
@@ -92,12 +93,15 @@ export default {
         return json({ error: "missing or invalid room code", code: "bad_room" }, 400);
       }
 
+      // Where the player connects from, for the lag log (request.cf is only
+      // reliable here). DEV_TRUST_WHERE (wrangler dev --var) lets tests fake it.
+      const where = playerWhere(request, { trustHeaders: env.DEV_TRUST_WHERE === "1" });
       const roomId = env.ROOMS.idFromName(roomCode);
       const roomStub = env.ROOMS.get(roomId);
       const forwardUrl = new URL(request.url);
       forwardUrl.pathname = "/room";
       forwardUrl.search = `?code=${roomCode}&name=${encodeURIComponent(name)}&create=${create ? 1 : 0}${reconnectToken ? `&rt=${encodeURIComponent(reconnectToken)}` : ""}`;
-      return roomStub.fetch(forwardUrl.toString(), request);
+      return roomStub.fetch(forwardUrl.toString(), withWhere(request, where));
     }
 
     return json({ error: "not found" }, 404);

@@ -5,6 +5,7 @@
 // dies with the isolate and would silently kill rooms — the roadmap forbids it).
 
 import { NetStats, sendNetLog, coloOf } from "./netstats.js";
+import { whereOf } from "./netplace.js";
 
 const PROTOCOL_VERSION = 1;
 const BUILD_GRACE_SEC = 30;
@@ -177,7 +178,7 @@ export class Room {
         await this.save();
       }
       const pair = new WebSocketPair();
-      const joined = await this.handleJoin(pair[1], name, isCreate, rt);
+      const joined = await this.handleJoin(pair[1], name, isCreate, rt, whereOf(request));
       if (!joined) {
         return new Response(JSON.stringify({ error: "room full", code: "room_full" }), {
           status: 409,
@@ -191,7 +192,11 @@ export class Room {
 
   // ---------- joins ----------
 
-  async handleJoin(ws, name, isCreate, reconnectToken) {
+  /**
+   * `where` is netplace.js's { country, edge } for the player, when known.
+   * @param {{ country: string, edge: string } | null} [where]
+   */
+  async handleJoin(ws, name, isCreate, reconnectToken, where = null) {
     // reconnect by token
     if (reconnectToken) {
       const idx = this.s.slots.findIndex((s) => s && s.token === reconnectToken);
@@ -200,7 +205,9 @@ export class Room {
         ws.serializeAttachment({ slot: idx });
         this.s.slots[idx].connected = true;
         this.s.slots[idx].disconnectedAt = 0;
+        if (where) this.s.slots[idx].where = where;
         this.net?.reconnect(reconnectToken);
+        this.net?.seat(reconnectToken, this.s.slots[idx].name, where);
         await this.save();
         this.sendTo(idx, "welcome", { slot: idx, reconnectToken, state: this.lobbyStatePayload() });
         this.broadcast("peer_reconnected", { slot: idx }, idx);
@@ -216,8 +223,8 @@ export class Room {
     const free = this.s.slots.findIndex((s) => s === null);
     if (free === -1) return false;
     const token = crypto.randomUUID();
-    this.s.slots[free] = { name, token, ready: false, locked: false, connected: true, bpHash: null };
-    this.net?.seat(token, name);
+    this.s.slots[free] = { name, token, ready: false, locked: false, connected: true, bpHash: null, where };
+    this.net?.seat(token, name, where);
     await this.save();
     this.state.acceptWebSocket(ws, ["room"]);
     ws.serializeAttachment({ slot: free });
@@ -478,7 +485,7 @@ export class Room {
     this.endNetLog("abandoned");
     this.net = new NetStats();
     this.netOutcomeSeen = false;
-    for (const s of this.s.slots) if (s) this.net.seat(s.token, s.name);
+    for (const s of this.s.slots) if (s) this.net.seat(s.token, s.name, s.where);
     if (!this.colo) coloOf().then((colo) => { this.colo = colo; });
   }
 

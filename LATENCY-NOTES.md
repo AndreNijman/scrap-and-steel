@@ -4,7 +4,7 @@
 
 Both clients run the whole match simulation (planck physics, power, logic,
 damage) from the same seed and both locked blueprints
-(src/main.ts:719-729, startOnlineMatch at src/main.ts:755). Nobody is the
+(src/main.ts:721-731, startOnlineMatch at src/main.ts:755). Nobody is the
 authority in practice:
 
 - Each client applies its own input on its own tick at once and the
