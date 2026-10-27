@@ -101,7 +101,8 @@ even with no network delay, sending inputs every 2nd tick and applying them on
 arrival puts the two players' matches metres apart within seconds, and they
 can name different winners. Latency only adds a little on top. Hiding delay
 cannot fix this; only lockstep or rollback can. "Same winner 6/6" at 200 ms
-is chance: the matches here mostly end in a time-out draw on both sides.
+is chance over 6 matches (the 0 ms control got 4/6), not a sign that delay
+helps.
 
 ### Rollback estimate
 
